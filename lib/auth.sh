@@ -91,21 +91,24 @@ apply_auth_mode() { # apply_auth_mode <mode>
 
     # --- prerequisites --------------------------------------------------------
     if [[ "$new" != "cert" ]]; then
-        PLUGIN_PATH="$(find_auth_pam_plugin)" || die "openvpn-plugin-auth-pam.so not found. Is OpenVPN installed?"
+        if ! PLUGIN_PATH="$(find_auth_pam_plugin)"; then
+            ui_msg "Error" "openvpn-plugin-auth-pam.so not found. Is OpenVPN installed correctly?"
+            return 1
+        fi
         config_set PLUGIN_PATH "$PLUGIN_PATH"
         groupadd -f "$VPN_GROUP"
     fi
     case "$new" in
         password_totp)
-            find_pam_module pam_google_authenticator.so || {
-                ui_info "Installing TOTP PAM module..."
-                pkg_install_totp
-            } ;;
+            if ! find_pam_module pam_google_authenticator.so; then
+                ui_run "Install TOTP PAM module (pam_google_authenticator)" pkg_install_totp \
+                    || { ui_msg "Error" "Could not install the TOTP PAM module. See ${OVM_LOG_FILE}."; return 1; }
+            fi ;;
         yubikey|password_yubikey)
-            find_pam_module pam_yubico.so || {
-                ui_info "Installing YubiKey PAM module..."
-                pkg_install_yubico
-            }
+            if ! find_pam_module pam_yubico.so; then
+                ui_run "Install YubiKey PAM module (pam_yubico)" pkg_install_yubico \
+                    || { ui_msg "Error" "Could not install the YubiKey PAM module. See ${OVM_LOG_FILE}."; return 1; }
+            fi
             if [[ -z "$YUBICO_ID" && -z "$YUBICO_URL" ]]; then
                 ui_msg "YubiKey API required" \
 "YubiKey OTP validation needs either a YubiCloud API key

@@ -156,7 +156,7 @@ _fw_ufw_remove() {
 
 _fw_iptables_apply() {
     local ipt ip6t
-    ipt="$(command -v iptables)" || die "iptables binary not found."
+    ipt="$(command -v iptables)" || { log_error "iptables binary not found"; return 1; }
     ip6t="$(command -v ip6tables || true)"
 
     mkdir -p "$OVM_FW_DIR"
@@ -217,8 +217,8 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable --now openvpn-manager-iptables.service >/dev/null 2>&1 \
-        || die "Failed to enable the iptables rules service."
+    systemctl enable --now openvpn-manager-iptables.service \
+        || { log_error "Failed to enable the iptables rules service"; return 1; }
 }
 
 _fw_iptables_remove() {

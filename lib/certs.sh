@@ -16,7 +16,9 @@ run_easyrsa() { # run_easyrsa [EXTRA_ENV...] -- <easyrsa args...>
         export EASYRSA_CERT_EXPIRE=3650
         export EASYRSA_CRL_DAYS=3650
         export EASYRSA_BATCH=1
-        ./easyrsa "$@"
+        # stdin closed: if easy-rsa ever tries to prompt, it must fail
+        # loudly instead of hanging on an invisible question
+        ./easyrsa "$@" < /dev/null
     ) >> "$OVM_LOG_FILE" 2>&1
 }
 
@@ -27,7 +29,7 @@ pki_setup_easyrsa_dir() {
     if [[ -x "${EASYRSA_DIR}/easyrsa" ]]; then
         return 0
     fi
-    src="$(find_easyrsa)" || die "easy-rsa not found. Is the easy-rsa package installed?"
+    src="$(find_easyrsa)" || { log_error "easy-rsa not found (is the easy-rsa package installed?)"; return 1; }
     if [[ -d "$(dirname "$src")/x509-types" ]]; then
         cp -a "$(dirname "$src")/." "$EASYRSA_DIR/"
     else
@@ -39,19 +41,21 @@ pki_setup_easyrsa_dir() {
 pki_init() {
     # Creates a brand new PKI. Destroys any existing one (caller must confirm).
     local rand
-    pki_setup_easyrsa_dir
+    pki_setup_easyrsa_dir || return 1
     rand="$(openssl rand -hex 6)"
     SERVER_NAME="server_${rand}"
 
     log_info "Initialising new PKI (server certificate: ${SERVER_NAME})"
     rm -rf "$PKI_DIR"
 
-    run_easyrsa init-pki                       || die "easy-rsa init-pki failed (see $OVM_LOG_FILE)"
+    run_easyrsa init-pki \
+        || { log_error "easy-rsa init-pki failed"; return 1; }
     EASYRSA_REQ_CN="ca_${rand}" run_easyrsa build-ca nopass \
-                                               || die "easy-rsa build-ca failed"
+        || { log_error "easy-rsa build-ca failed"; return 1; }
     run_easyrsa build-server-full "$SERVER_NAME" nopass \
-                                               || die "easy-rsa build-server-full failed"
-    run_easyrsa gen-crl                        || die "easy-rsa gen-crl failed"
+        || { log_error "easy-rsa build-server-full failed"; return 1; }
+    run_easyrsa gen-crl \
+        || { log_error "easy-rsa gen-crl failed"; return 1; }
 
     chmod 700 "${PKI_DIR}/private"
     find "${PKI_DIR}/private" -type f -exec chmod 600 {} +
@@ -64,6 +68,8 @@ pki_init() {
     # tls-crypt pre-shared key: hides the TLS handshake, blocks port scans/DoS
     openvpn --genkey secret "${OVPN_SERVER_DIR}/tls-crypt.key" 2>/dev/null \
         || openvpn --genkey --secret "${OVPN_SERVER_DIR}/tls-crypt.key"
+    [[ -s "${OVPN_SERVER_DIR}/tls-crypt.key" ]] \
+        || { log_error "tls-crypt key generation failed"; return 1; }
     chmod 600 "${OVPN_SERVER_DIR}/tls-crypt.key"
 
     pki_install_server_files

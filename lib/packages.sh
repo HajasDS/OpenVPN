@@ -3,23 +3,26 @@
 # lib/packages.sh - package installation per package manager
 # =============================================================================
 
+# Output stays VISIBLE on purpose (shown live via ui_run). The lock timeout
+# keeps apt from hanging forever behind unattended-upgrades on fresh boots.
 pkg_refresh() {
     log_info "Refreshing package metadata (${PKG_MANAGER})"
     case "$PKG_MANAGER" in
-        apt)    DEBIAN_FRONTEND=noninteractive apt-get update -qq ;;
-        dnf)    dnf -q makecache --refresh >/dev/null 2>&1 || true ;;
-        yum)    yum -q makecache >/dev/null 2>&1 || true ;;
-        pacman) pacman -Sy --noconfirm >/dev/null ;;
+        apt)    DEBIAN_FRONTEND=noninteractive apt-get update -q -o DPkg::Lock::Timeout=300 ;;
+        dnf)    dnf makecache --refresh || true ;;
+        yum)    yum makecache || true ;;
+        pacman) pacman -Sy --noconfirm ;;
     esac
 }
 
 pkg_install() { # pkg_install pkg1 pkg2 ... (fails if any package fails)
     log_info "Installing packages: $*"
     case "$PKG_MANAGER" in
-        apt)    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" ;;
-        dnf)    dnf install -y -q "$@" ;;
-        yum)    yum install -y -q "$@" ;;
-        pacman) pacman -S --noconfirm --needed "$@" ;;
+        apt)    DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
+                    -o DPkg::Lock::Timeout=300 "$@" </dev/null ;;
+        dnf)    dnf install -y "$@" </dev/null ;;
+        yum)    yum install -y "$@" </dev/null ;;
+        pacman) pacman -S --noconfirm --needed "$@" </dev/null ;;
     esac
 }
 
@@ -79,8 +82,10 @@ pkg_install_totp() {
         pacman) pkg_install libpam-google-authenticator ;;
     esac
     pkg_install_best_effort qrencode
-    find_pam_module pam_google_authenticator.so \
-        || die "pam_google_authenticator.so not found after installation."
+    find_pam_module pam_google_authenticator.so || {
+        log_error "pam_google_authenticator.so not found after installation"
+        return 1
+    }
 }
 
 pkg_install_yubico() {
@@ -90,6 +95,8 @@ pkg_install_yubico() {
         dnf|yum) pkg_install pam_yubico ;;
         pacman) pkg_install yubico-pam || pkg_install_best_effort yubico-pam ;;
     esac
-    find_pam_module pam_yubico.so \
-        || die "pam_yubico.so not found after installation."
+    find_pam_module pam_yubico.so || {
+        log_error "pam_yubico.so not found after installation"
+        return 1
+    }
 }

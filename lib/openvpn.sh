@@ -99,26 +99,41 @@ Proceed?" || return 0
 
     log_info "Installation started (endpoint=${ENDPOINT} port=${PORT}/${PROTOCOL} ipv6=${IPV6_ENABLED})"
 
-    ui_info "Installing packages (this may take a while)..."
-    pkg_refresh
-    pkg_install_core || die "Package installation failed (see $OVM_LOG_FILE)."
+    # From here on we work on the PLAIN terminal with live output, so the
+    # admin always sees what is happening (package downloads can take a
+    # while and may briefly wait for an apt/dnf lock).
+    clear 2>/dev/null || true
+    printf '=== openvpn-manager: installing OpenVPN ===\n'
+    printf 'Live output below. Operations log: %s\n' "$OVM_LOG_FILE"
 
-    ui_info "Generating PKI and certificates (ECDSA prime256v1)..."
-    pki_init
+    if ! ui_run "Refresh package metadata" pkg_refresh; then
+        ui_msg "Installation failed" "Could not refresh package metadata.
+Check network connectivity and the output above."
+        return 1
+    fi
+    if ! ui_run "Install packages (openvpn, easy-rsa, openssl, curl)" pkg_install_core; then
+        ui_msg "Installation failed" "Package installation failed.
+See the output above and ${OVM_LOG_FILE}."
+        return 1
+    fi
+    if ! ui_run "Generate PKI and certificates (ECDSA prime256v1)" pki_init; then
+        ui_msg "Installation failed" "PKI generation failed. See ${OVM_LOG_FILE}."
+        return 1
+    fi
 
-    ui_info "Writing server configuration..."
-    write_server_conf
-    write_client_template
-    write_sysctl
+    ui_run "Write server configuration" write_server_conf
+    ui_run "Write client profile template" write_client_template
+    ui_run "Enable IP forwarding (sysctl)" write_sysctl
 
-    ui_info "Configuring firewall / NAT rules..."
-    firewall_apply
+    if ! ui_run "Configure firewall / NAT rules" firewall_apply; then
+        ui_msg "Installation failed" "Firewall configuration failed. See ${OVM_LOG_FILE}."
+        return 1
+    fi
 
-    ui_info "Starting OpenVPN..."
     mkdir -p /var/log/openvpn
     systemctl daemon-reload
     svc_enable
-    systemctl restart "$OVPN_SERVICE"
+    ui_run "Start OpenVPN service" systemctl restart "$OVPN_SERVICE"
     sleep 1
 
     if svc_is_active; then

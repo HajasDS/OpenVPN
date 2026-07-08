@@ -17,7 +17,8 @@ ui_init() {
     elif command -v dialog >/dev/null 2>&1; then
         UI_TOOL="dialog"
     else
-        # Try to install whiptail/newt quietly; fall back to plain prompts.
+        # Try to install whiptail/newt; fall back to plain prompts.
+        printf 'No TUI backend found - installing whiptail...\n'
         if pkg_install_ui_tool; then
             if command -v whiptail >/dev/null 2>&1; then UI_TOOL="whiptail"
             elif command -v dialog >/dev/null 2>&1; then UI_TOOL="dialog"
@@ -74,10 +75,34 @@ ui_yesno() { # ui_yesno "Title" "Question" [defaultno]
 ui_info() { # non-blocking progress note
     local text="$1"
     case "$UI_TOOL" in
-        plain) printf '... %s\n' "$text" ;;
-        *) "$UI_TOOL" --backtitle "$OVM_BACKTITLE" --title "Working" \
-               --infobox "$text" 7 70 ;;
+        plain)
+            printf '... %s\n' "$text" ;;
+        whiptail)
+            # newt quirk: whiptail --infobox draws nothing on xterm-like
+            # terminals unless TERM is downgraded for the call
+            TERM=ansi whiptail --backtitle "$OVM_BACKTITLE" --title "Working" \
+                --infobox "$text" 7 70 ;;
+        *)
+            "$UI_TOOL" --backtitle "$OVM_BACKTITLE" --title "Working" \
+                --infobox "$text" 7 70 ;;
     esac
+}
+
+ui_run() { # ui_run "label" cmd [args...]
+    # Run a long/observable step on the PLAIN terminal so the admin sees the
+    # real output live (package managers, easy-rsa, systemd). Returns the
+    # command's exit code; prints an OK/FAIL marker line.
+    local label="$1"; shift
+    printf '\n==> %s\n' "$label"
+    log_info "STEP: ${label}"
+    if "$@"; then
+        printf '    [ OK ] %s\n' "$label"
+        return 0
+    fi
+    local rc=$?
+    printf '    [FAIL] %s (exit %d) - details: %s\n' "$label" "$rc" "$OVM_LOG_FILE"
+    log_error "STEP failed (exit ${rc}): ${label}"
+    return "$rc"
 }
 
 # --- Input --------------------------------------------------------------------
