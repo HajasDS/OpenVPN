@@ -16,6 +16,8 @@ Out of scope: a fully compromised server host (root can read the CA key and TOTP
 
 ## TLS / crypto profile
 
+Since v1.2.0 the crypto parameters below are the *recommended defaults* of a configurable, validated crypto section (see [CRYPTO.md](CRYPTO.md)): the installer shows them before anything is generated, only modern whitelisted values can be selected (AEAD ciphers only, no DH files, RSA < 2048 not offered), weak/legacy choices (RSA-2048, `tls-auth`) require an explicit warned confirmation, and the selection is verified against the installed OpenVPN/OpenSSL before the PKI is built.
+
 | Setting | Value | Rationale |
 |---|---|---|
 | PKI | easy-rsa 3, **ECDSA prime256v1**, CA offline-passwordless on the host | small, fast, modern; matches angristan defaults |

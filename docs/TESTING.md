@@ -149,6 +149,23 @@ Each row: perform the action in the given broken state. **Pass criteria for ever
 
 Also verify the audit log after 1–4: lines like `Switch authentication mode … blocked: YubiKey validation service (blocking)` and **no** secrets/OTP/API-key values anywhere in `/var/log/openvpn-manager.log`.
 
+### 3.12 Crypto configuration scenarios (v1.2.0)
+
+| # | Scenario | Pass criteria |
+|---|---|---|
+| 1 | Fresh install, accept recommended defaults | Crypto step shows "ECDSA prime256v1 \| AES-256-GCM:… \| TLS>=1.2 \| tls-crypt \| SHA256"; after install `server.conf` contains `ecdh-curve prime256v1`, `tls-crypt`, `data-ciphers`, `data-ciphers-fallback`; config file contains all `PKI_*`/`DATA_*`/`TLS_MIN`/`CONTROL_WRAP`/`*_DAYS` keys |
+| 2 | Fresh install, RSA-4096 preset | `openssl x509 -in pki/ca.crt -noout -text` shows RSA 4096; server.conf `tls-cipher` uses `ECDHE-RSA`; client connects |
+| 3 | Fresh install, custom ECDSA P-384 + AES-256-GCM only + TLS 1.3 + SHA384 | cert curve = secp384r1; `tls-version-min 1.3`; no `tls-cipher` line (1.3 suites only); modern client connects |
+| 4 | Custom cipher list: enter `AES-256-CBC` or `BF-CBC` | rejected at input with the AEAD whitelist message — never written anywhere |
+| 5 | Custom validity: client 5000 days, CA 3650 | blocked: "certificates cannot outlive the CA"; re-prompt |
+| 6 | tls-auth selected | warned (default No); if confirmed: server.conf has `tls-auth tls-crypt.key 0`, profile has `key-direction 1` + `<tls-auth>`; client connects |
+| 7 | Unsupported selection vs installed OpenVPN (simulate: temporarily shadow `openvpn` with a stub whose `--show-ciphers` output is empty) | install step "Validate crypto settings" fails visibly; offer to reset-to-defaults or abort; no PKI generated on abort |
+| 8 | Existing server → Server config → Crypto → runtime change (e.g. TLS min 1.2→1.3) | old→new confirmation lists the exact impact; after apply: server.conf regenerated, service restarted, profile regeneration offered; **old** profile fails, **regenerated** profile connects |
+| 9 | Existing server → change validity periods | message "applies to future certificates"; new user's cert expiry reflects the new setting, existing certs unchanged |
+| 10 | Existing server → try to change key type | explanatory dialog pointing to Reinstall; nothing changed |
+| 11 | Pre-1.2.0 config file (no crypto keys) | starts cleanly; defaults identical to the previously hardcoded values; regenerated profiles stay compatible with existing clients |
+| 12 | Corrupt crypto values (`PKI_ALGO=des`, `DATA_CIPHERS=BF-CBC`, `CA_DAYS=999999`) | start: log shows "Crypto settings sanitized …"; menus show the recovered defaults |
+
 ## 4. Regression quick-list
 
 After any code change, minimally re-run: 3.1(1), 3.2(1), 3.3, 3.5(2), 3.6(2), 3.10.

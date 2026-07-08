@@ -317,9 +317,16 @@ build_client_profile() { # build_client_profile <name>
         echo "<key>"
         cat "$key"
         echo "</key>"
-        echo "<tls-crypt>"
-        cat "${OVPN_SERVER_DIR}/tls-crypt.key"
-        echo "</tls-crypt>"
+        if [[ "$CONTROL_WRAP" == "tls-crypt" ]]; then
+            echo "<tls-crypt>"
+            cat "${OVPN_SERVER_DIR}/tls-crypt.key"
+            echo "</tls-crypt>"
+        else
+            echo "key-direction 1"
+            echo "<tls-auth>"
+            cat "${OVPN_SERVER_DIR}/tls-crypt.key"
+            echo "</tls-auth>"
+        fi
     } > "$out"
     chmod 600 "$out"
     log_info "Client profile generated: ${name}.ovpn (auth mode: ${AUTH_MODE})"

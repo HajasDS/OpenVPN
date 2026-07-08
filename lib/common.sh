@@ -7,7 +7,7 @@
 # private keys or client profile contents. Log operational events only.
 # =============================================================================
 
-readonly OVM_VERSION="1.1.0"
+readonly OVM_VERSION="1.2.0"
 
 # --- Paths -------------------------------------------------------------------
 readonly OVM_ETC_DIR="/etc/openvpn-manager"
@@ -53,6 +53,9 @@ readonly -a OVM_CONFIG_KEYS=(
     SERVER_NAME AUTH_MODE TOTP_NULLOK ENFORCE_CN_MATCH
     YUBICO_ID YUBICO_KEY YUBICO_URL
     FIREWALL_BACKEND PLUGIN_PATH
+    PKI_ALGO PKI_CURVE PKI_RSA_BITS
+    DATA_CIPHERS DATA_FALLBACK TLS_MIN CONTROL_WRAP AUTH_DIGEST
+    CA_DAYS SERVER_CERT_DAYS CLIENT_CERT_DAYS CRL_DAYS
 )
 
 # =============================================================================
@@ -159,6 +162,20 @@ ENFORCE_CN_MATCH="yes"
 YUBICO_ID="" YUBICO_KEY="" YUBICO_URL=""
 FIREWALL_BACKEND=""
 PLUGIN_PATH=""
+# Crypto defaults = the "recommended modern" preset (see lib/crypto.sh and
+# docs/CRYPTO.md); shown and changeable in the installer, never hidden.
+PKI_ALGO="ec"
+PKI_CURVE="prime256v1"
+PKI_RSA_BITS="4096"
+DATA_CIPHERS="AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305"
+DATA_FALLBACK="AES-256-GCM"
+TLS_MIN="1.2"
+CONTROL_WRAP="tls-crypt"
+AUTH_DIGEST="SHA256"
+CA_DAYS="3650"
+SERVER_CERT_DAYS="3650"
+CLIENT_CERT_DAYS="3650"
+CRL_DAYS="3650"
 
 config_sanitize() {
     # Recover safely from a hand-edited, truncated or corrupted config file:

@@ -20,7 +20,7 @@ umask 077
 OVM_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly OVM_ROOT
 
-for _mod in common os ui packages certs firewall service openvpn users auth totp yubikey checks; do
+for _mod in common os ui packages certs firewall service crypto openvpn users auth totp yubikey checks; do
     # shellcheck source=/dev/null
     source "${OVM_ROOT}/lib/${_mod}.sh" \
         || { printf 'FATAL: cannot load lib/%s.sh\n' "${_mod}" >&2; exit 1; }
@@ -164,6 +164,7 @@ main() {
     init_dirs
     config_load
     config_sanitize
+    crypto_sanitize
     ui_init
 
     log_info "openvpn-manager v${OVM_VERSION} started on ${OS_NAME} (auth mode: ${AUTH_MODE})"

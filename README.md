@@ -45,8 +45,9 @@ Everything else is interactive. The tool detects your distribution and package m
 2. **IPv6** in-tunnel support (offered when the host has public IPv6)
 3. **Port** and **protocol** (UDP recommended, TCP available)
 4. **DNS for clients** (Cloudflare / Google / Quad9 / AdGuard / OpenDNS / system / custom)
-5. Confirmation summary → packages, PKI (ECDSA P-256), server config, IP forwarding, firewall/NAT, service start
-6. First VPN user
+5. **Cryptographic settings** — recommended modern defaults (ECDSA P-256, AES-GCM/ChaCha20, TLS ≥ 1.2, `tls-crypt`), RSA-4096 and high-security presets, or full customization (key type, ciphers, TLS min, digests, validity periods); everything reviewed on screen and validated before use — see [docs/CRYPTO.md](docs/CRYPTO.md)
+6. Confirmation summary → packages, PKI, server config, IP forwarding, firewall/NAT, service start
+7. First VPN user
 
 ### Files the tool manages
 
@@ -69,7 +70,7 @@ Run `sudo ./openvpn-manager.sh` any time — it is safe to re-run; it detects th
 - **User management** — add users (optional key passphrase), revoke (cert + account + TOTP + YubiKey + profile in one step), list with status flags, regenerate `.ovpn` profiles, set/change VPN passwords.
 - **Authentication** — switch auth mode, manage TOTP and YubiKeys, toggle username↔certificate matching.
 - **Service control** — status with live connected-client list, start/stop/restart, journal view.
-- **Server configuration** — change port, protocol, client DNS, public endpoint. Config files are regenerated from persisted state, firewall rules are updated, and you're offered a profile regeneration.
+- **Server configuration** — change port, protocol, client DNS, public endpoint, and crypto settings (runtime crypto changes explain their impact and trigger profile regeneration; key-type changes require a reinstall and the UI says so — [docs/CRYPTO.md](docs/CRYPTO.md)). Config files are regenerated from persisted state, firewall rules are updated, and you're offered a profile regeneration.
 - **Firewall / NAT** — view, re-apply or remove the VPN rules.
 - **Backups** — every modified file is snapshotted first to a timestamped folder.
 - **Uninstall** — full cleanup with a final backup archive in `/root` (see below).

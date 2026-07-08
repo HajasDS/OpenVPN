@@ -6,15 +6,23 @@
 # easy-rsa output goes to the manager log; it contains file paths, never keys.
 # =============================================================================
 
-run_easyrsa() { # run_easyrsa [EXTRA_ENV...] -- <easyrsa args...>
+run_easyrsa() { # run_easyrsa <easyrsa args...>
+    # Crypto parameters come from the persisted configuration (lib/crypto.sh).
+    # OVM_CERT_DAYS_OVERRIDE lets callers issue certificates with a different
+    # validity than the server default (used for client certificates).
     (
         cd "$EASYRSA_DIR" || exit 1
         export EASYRSA_PKI="$PKI_DIR"
-        export EASYRSA_ALGO="ec"
-        export EASYRSA_CURVE="prime256v1"
-        export EASYRSA_CA_EXPIRE=3650
-        export EASYRSA_CERT_EXPIRE=3650
-        export EASYRSA_CRL_DAYS=3650
+        export EASYRSA_ALGO="$PKI_ALGO"
+        if [[ "$PKI_ALGO" == "ec" ]]; then
+            export EASYRSA_CURVE="$PKI_CURVE"
+        else
+            export EASYRSA_KEY_SIZE="$PKI_RSA_BITS"
+        fi
+        export EASYRSA_DIGEST="${AUTH_DIGEST,,}"
+        export EASYRSA_CA_EXPIRE="$CA_DAYS"
+        export EASYRSA_CERT_EXPIRE="${OVM_CERT_DAYS_OVERRIDE:-$SERVER_CERT_DAYS}"
+        export EASYRSA_CRL_DAYS="$CRL_DAYS"
         export EASYRSA_BATCH=1
         # stdin closed: if easy-rsa ever tries to prompt, it must fail
         # loudly instead of hanging on an invisible question
@@ -101,11 +109,13 @@ cert_exists() { # cert_exists <name> -> true if a valid (V) cert with this CN ex
 cert_create_client() { # cert_create_client <name> [passfile]
     local name="$1" passfile="${2:-}"
     if [[ -n "$passfile" ]]; then
+        OVM_CERT_DAYS_OVERRIDE="$CLIENT_CERT_DAYS" \
         EASYRSA_PASSOUT="file:${passfile}" EASYRSA_PASSIN="file:${passfile}" \
             run_easyrsa build-client-full "$name" \
             || { log_error "Certificate creation failed for user '$name'"; return 1; }
     else
-        run_easyrsa build-client-full "$name" nopass \
+        OVM_CERT_DAYS_OVERRIDE="$CLIENT_CERT_DAYS" \
+            run_easyrsa build-client-full "$name" nopass \
             || { log_error "Certificate creation failed for user '$name'"; return 1; }
     fi
     find "${PKI_DIR}/private" -type f -exec chmod 600 {} +

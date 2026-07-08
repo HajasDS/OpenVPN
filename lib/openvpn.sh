@@ -88,6 +88,9 @@ Enable IPv6 inside the VPN tunnel as well?" \
 
     _choose_dns || return 0   # sets DNS1 DNS2 DNS_LABEL
 
+    # Cryptographic settings: review/customize BEFORE anything is generated.
+    crypto_install_menu || return 0
+
     ui_yesno "Confirm installation" \
 "Ready to install with these settings:
 
@@ -95,7 +98,7 @@ Enable IPv6 inside the VPN tunnel as well?" \
   Interface:  ${nic}
   VPN subnet: ${VPN_CIDR4}$( [[ $ipv6 == yes ]] && printf ' + %s' "$VPN_SUBNET6" )
   DNS:        ${DNS_LABEL} (${DNS1}${DNS2:+, ${DNS2}})
-  Crypto:     ECDSA prime256v1, AES-256-GCM, tls-crypt, TLS >= 1.2
+  Crypto:     $(crypto_short_desc)
   Auth mode:  certificate only (changeable later in the Authentication menu)
 
 Proceed?" || return 0
@@ -109,6 +112,7 @@ Proceed?" || return 0
     config_set DNS1 "$DNS1"; config_set DNS2 "$DNS2"; config_set DNS_LABEL "$DNS_LABEL"
     config_set TOTP_NULLOK "$TOTP_NULLOK"
     config_set ENFORCE_CN_MATCH "$ENFORCE_CN_MATCH"
+    crypto_persist
 
     log_info "Installation started (endpoint=${ENDPOINT} port=${PORT}/${PROTOCOL} ipv6=${IPV6_ENABLED})"
 
@@ -131,7 +135,20 @@ Check network connectivity and the output above."
 See the output above and ${OVM_LOG_FILE}."
         return 1
     fi
-    if ! ui_run "Generate PKI and certificates (ECDSA prime256v1)" pki_init; then
+    if ! ui_run "Validate crypto settings against installed OpenVPN/OpenSSL" crypto_validate_runtime; then
+        ui_pause; ui_resume_tui
+        if ui_yesno "Unsupported crypto settings" \
+"The installed OpenVPN/OpenSSL does not support part of the selected
+crypto configuration (details in ${OVM_LOG_FILE}).
+
+Reset to the recommended modern defaults and continue?"; then
+            crypto_set_defaults
+            crypto_persist
+        else
+            return 1
+        fi
+    fi
+    if ! ui_run "Generate PKI and certificates ($(crypto_key_type_desc))" pki_init; then
         ui_pause; ui_resume_tui
         ui_msg "Installation failed" "PKI generation failed. See ${OVM_LOG_FILE}."
         return 1
@@ -257,21 +274,29 @@ write_server_conf() {
         echo "push \"dhcp-option DNS ${DNS1}\""
         [[ -n "$DNS2" ]] && echo "push \"dhcp-option DNS ${DNS2}\""
         echo
-        echo "# --- TLS / crypto (modern-only) ---"
+        echo "# --- TLS / crypto (from persisted settings: $(crypto_short_desc)) ---"
         echo "ca ca.crt"
         echo "cert ${SERVER_NAME}.crt"
         echo "key ${SERVER_NAME}.key"
         echo "dh none"
-        echo "ecdh-curve prime256v1"
-        echo "tls-crypt tls-crypt.key"
+        echo "ecdh-curve $(crypto_ecdh_curve)"
+        if [[ "$CONTROL_WRAP" == "tls-crypt" ]]; then
+            echo "tls-crypt tls-crypt.key"
+        else
+            echo "# legacy tls-auth mode (same key file, HMAC-only)"
+            echo "tls-auth tls-crypt.key 0"
+        fi
         echo "crl-verify crl.pem"
         echo "verify-client-cert require"
-        echo "auth SHA256"
-        echo "cipher AES-256-GCM"
-        echo "data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305"
+        echo "auth ${AUTH_DIGEST}"
+        echo "data-ciphers ${DATA_CIPHERS}"
+        echo "data-ciphers-fallback ${DATA_FALLBACK}"
         echo "tls-server"
-        echo "tls-version-min 1.2"
-        echo "tls-cipher TLS-ECDHE-ECDSA-WITH-AES-256-GCM-SHA384"
+        echo "tls-version-min ${TLS_MIN}"
+        if [[ "$TLS_MIN" != "1.3" ]]; then
+            echo "tls-cipher $(crypto_tls_cipher_list)"
+        fi
+        echo "tls-ciphersuites TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256"
         echo
         auth_server_directives
         echo
@@ -295,12 +320,11 @@ write_client_template() {
         echo "persist-tun"
         echo "remote-cert-tls server"
         echo "verify-x509-name ${SERVER_NAME} name"
-        echo "auth SHA256"
+        echo "auth ${AUTH_DIGEST}"
         echo "auth-nocache"
-        echo "cipher AES-256-GCM"
-        echo "data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305"
+        echo "data-ciphers ${DATA_CIPHERS}"
         echo "tls-client"
-        echo "tls-version-min 1.2"
+        echo "tls-version-min ${TLS_MIN}"
         echo "ignore-unknown-option block-outside-dns"
         echo "setenv opt block-outside-dns  # Windows DNS-leak protection"
         echo "verb 3"
@@ -332,9 +356,11 @@ server_settings_menu() {
             "proto"    "Change protocol (now: ${PROTOCOL})" \
             "dns"      "Change client DNS (now: ${DNS_LABEL})" \
             "endpoint" "Change public endpoint (now: ${ENDPOINT})" \
+            "crypto"   "Crypto settings ($(crypto_key_type_desc), ${CONTROL_WRAP}, TLS>=${TLS_MIN})" \
             "view"     "View current server.conf" \
             "back"     "Back to main menu")" || return 0
         case "$choice" in
+            crypto) crypto_post_install_menu ;;
             port)
                 local new
                 new="$(ui_input_validated "Port" "New listening port:" "$PORT" \

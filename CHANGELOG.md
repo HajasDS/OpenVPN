@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0 — 2026-07-08
+
+### Added
+- **Configurable cryptographic settings** (`lib/crypto.sh`, [docs/CRYPTO.md](docs/CRYPTO.md)). New "Cryptographic settings" step in the installer: review the recommended modern defaults, pick a preset (Recommended modern / RSA-4096 / High-security P-384+TLS1.3), or customize each parameter — key type (ECDSA P-256/384/521, RSA 2048–4096), data ciphers + fallback (AEAD whitelist), TLS minimum, `tls-crypt` vs `tls-auth`, HMAC digest, and CA/server/client/CRL validity periods. Nothing crypto-related is hidden or hardcoded anymore; the full selection is shown before installation and persisted in the config file.
+- Post-install **crypto menu** under Server configuration: runtime settings (ciphers, TLS min, wrap, digest) changeable with an explicit old→new impact confirmation (server.conf regen + restart + profile regeneration — never silent); validity changes apply to future certificates; key-type changes are explained as requiring a reinstall instead of being attempted.
+- **Validation layers**: whitelist-only menus and token-validated custom cipher lists; cert-validity-vs-CA cross checks; post-package-install verification against the actual `openvpn --show-ciphers/--show-digests` and `openssl ecparam -list_curves`, with a reset-to-defaults recovery path; `crypto_sanitize` on every start recovers missing (pre-1.2.0) or corrupted crypto config values.
+- Warnings for weak/legacy choices: RSA-2048 and `tls-auth` require explicit default-No confirmation; TLS-1.3-minimum client-compatibility note; >10-year client certificates flagged.
+
+### Changed
+- `server.conf` now uses `data-ciphers-fallback` instead of the deprecated `cipher` directive (removes OpenVPN 2.7 deprecation warnings, e.g. on Ubuntu 26.04); client templates use `data-ciphers`. TLS 1.2 control-channel suites are derived from the certificate type (ECDSA/RSA); explicit `tls-ciphersuites` set for TLS 1.3. Client certificates can now have their own validity period (easy-rsa per-issue override).
+- Defaults are unchanged from the previously hardcoded values — existing installs upgrade transparently.
+
 ## 1.1.0 — 2026-07-08
 
 ### Fixed
