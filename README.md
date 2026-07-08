@@ -33,7 +33,7 @@ Requirements: systemd, bash ≥ 4, a TUN device (`/dev/net/tun` — enable it fo
 ## Installation
 
 ```bash
-git clone git@github.com:HajasDS/OpenVPN.git openvpn-manager
+git clone https://github.com/HajasDS/OpenVPN.git openvpn-manager
 cd openvpn-manager
 chmod +x openvpn-manager.sh
 sudo ./openvpn-manager.sh
