@@ -60,7 +60,8 @@ Replace it?" defaultno || return 0
 
     if ! find_pam_module pam_google_authenticator.so; then
         ui_run "Install TOTP PAM module (pam_google_authenticator)" pkg_install_totp \
-            || { ui_msg "Error" "Could not install the TOTP PAM module. See ${OVM_LOG_FILE}."; return 1; }
+            || { ui_resume_tui; ui_msg "Error" "Could not install the TOTP PAM module. See ${OVM_LOG_FILE}."; return 1; }
+        ui_resume_tui
     fi
 
     # 20 random bytes -> 32-char base32 secret (no padding), like RFC 4226 suggests

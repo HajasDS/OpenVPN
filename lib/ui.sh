@@ -105,6 +105,22 @@ ui_run() { # ui_run "label" cmd [args...]
     return "$rc"
 }
 
+ui_pause() { # plain "press Enter" prompt (used after ui_run phases)
+    printf '\n%s' "${1:-Press Enter to continue...}"
+    read -r _ || true
+}
+
+ui_resume_tui() {
+    # Call after a block of plain ui_run output before returning to the
+    # whiptail/dialog menus. whiptail/newt does NOT reliably repaint after a
+    # program has scrolled the screen, which looks like a hang on an
+    # invisible dialog. A full clear resets the scroll region so the next
+    # dialog draws correctly.
+    [[ "$UI_TOOL" == "plain" ]] && return 0
+    clear 2>/dev/null || printf '\033[2J\033[H'
+    return 0
+}
+
 # --- Input --------------------------------------------------------------------
 
 ui_input() { # ui_input "Title" "Prompt" ["default"] -> stdout

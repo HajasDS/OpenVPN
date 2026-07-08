@@ -102,12 +102,12 @@ apply_auth_mode() { # apply_auth_mode <mode>
         password_totp)
             if ! find_pam_module pam_google_authenticator.so; then
                 ui_run "Install TOTP PAM module (pam_google_authenticator)" pkg_install_totp \
-                    || { ui_msg "Error" "Could not install the TOTP PAM module. See ${OVM_LOG_FILE}."; return 1; }
+                    || { ui_resume_tui; ui_msg "Error" "Could not install the TOTP PAM module. See ${OVM_LOG_FILE}."; return 1; }
             fi ;;
         yubikey|password_yubikey)
             if ! find_pam_module pam_yubico.so; then
                 ui_run "Install YubiKey PAM module (pam_yubico)" pkg_install_yubico \
-                    || { ui_msg "Error" "Could not install the YubiKey PAM module. See ${OVM_LOG_FILE}."; return 1; }
+                    || { ui_resume_tui; ui_msg "Error" "Could not install the YubiKey PAM module. See ${OVM_LOG_FILE}."; return 1; }
             fi
             if [[ -z "$YUBICO_ID" && -z "$YUBICO_URL" ]]; then
                 ui_msg "YubiKey API required" \
@@ -117,6 +117,7 @@ validation server URL. Configure it now."
                 yubikey_configure_api || return 1
             fi ;;
     esac
+    ui_resume_tui   # a package install above may have scrolled the screen
 
     # --- apply -----------------------------------------------------------------
     backup_file "$PAM_FILE"

@@ -107,16 +107,19 @@ Proceed?" || return 0
     printf 'Live output below. Operations log: %s\n' "$OVM_LOG_FILE"
 
     if ! ui_run "Refresh package metadata" pkg_refresh; then
+        ui_pause; ui_resume_tui
         ui_msg "Installation failed" "Could not refresh package metadata.
 Check network connectivity and the output above."
         return 1
     fi
     if ! ui_run "Install packages (openvpn, easy-rsa, openssl, curl)" pkg_install_core; then
+        ui_pause; ui_resume_tui
         ui_msg "Installation failed" "Package installation failed.
 See the output above and ${OVM_LOG_FILE}."
         return 1
     fi
     if ! ui_run "Generate PKI and certificates (ECDSA prime256v1)" pki_init; then
+        ui_pause; ui_resume_tui
         ui_msg "Installation failed" "PKI generation failed. See ${OVM_LOG_FILE}."
         return 1
     fi
@@ -126,6 +129,7 @@ See the output above and ${OVM_LOG_FILE}."
     ui_run "Enable IP forwarding (sysctl)" write_sysctl
 
     if ! ui_run "Configure firewall / NAT rules" firewall_apply; then
+        ui_resume_tui
         ui_msg "Installation failed" "Firewall configuration failed. See ${OVM_LOG_FILE}."
         return 1
     fi
@@ -136,24 +140,31 @@ See the output above and ${OVM_LOG_FILE}."
     ui_run "Start OpenVPN service" systemctl restart "$OVPN_SERVICE"
     sleep 1
 
+    # Completion is printed as PLAIN text (like the steps above) so it is
+    # always visible, then we cleanly hand control back to the TUI menus.
     if svc_is_active; then
         config_set INSTALLED "yes"; INSTALLED="yes"
         log_info "Installation finished successfully"
-        ui_msg "Installation complete" \
-"OpenVPN is installed and running.
-
-  Firewall backend: ${FIREWALL_BACKEND}
-  Server config:    ${OVPN_SERVER_CONF}
-  Client profiles:  ${OVM_CLIENT_DIR}
-  Manager log:      ${OVM_LOG_FILE}
-
-Next step: add your first VPN user."
-        ui_yesno "Add user" "Add the first VPN user now?" && user_add
+        printf '\n=== Installation complete ===\n'
+        printf '  OpenVPN is installed and RUNNING (systemd: %s).\n' "$OVPN_SERVICE"
+        printf '  It keeps running in the background after you exit this tool.\n\n'
+        printf '  Firewall backend: %s\n' "$FIREWALL_BACKEND"
+        printf '  Server config:    %s\n' "$OVPN_SERVER_CONF"
+        printf '  Client profiles:  %s\n' "$OVM_CLIENT_DIR"
+        printf '  Manager log:      %s\n' "$OVM_LOG_FILE"
+        ui_pause "Press Enter to return to the menu..."
+        ui_resume_tui
+        if ui_yesno "Add user" "OpenVPN is running. Add the first VPN user now?"; then
+            user_add
+        fi
     else
         log_error "OpenVPN failed to start after installation"
-        ui_show_text "OpenVPN failed to start" \
-            "$(journalctl -u "$OVPN_SERVICE" --no-pager -n 30 2>/dev/null)"
+        printf '\n=== OpenVPN failed to start ===\n'
+        journalctl -u "$OVPN_SERVICE" --no-pager -n 30 2>/dev/null
+        ui_pause "Press Enter to return to the menu..."
+        ui_resume_tui
     fi
+    return 0
 }
 
 _valid_nic() { ip link show "$1" >/dev/null 2>&1; }
