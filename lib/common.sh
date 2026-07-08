@@ -7,7 +7,7 @@
 # private keys or client profile contents. Log operational events only.
 # =============================================================================
 
-readonly OVM_VERSION="1.2.0"
+readonly OVM_VERSION="1.2.1"
 
 # --- Paths -------------------------------------------------------------------
 readonly OVM_ETC_DIR="/etc/openvpn-manager"

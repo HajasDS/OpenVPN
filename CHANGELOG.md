@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.1 — 2026-07-08
+
+### Fixed
+- Core packages are installed with `--no-install-recommends` on apt systems. This keeps the smart-card stack (`pcscd`, `opensc`, `libccid`) — which OpenVPN only *recommends* and this tool never uses — off headless servers, eliminating the harmless-but-alarming `pcscd.service` dependency failure that Ubuntu's package ordering prints during installation. If your distro ships it as a hard dependency the flag changes nothing and the message remains cosmetic.
+
 ## 1.2.0 — 2026-07-08
 
 ### Added

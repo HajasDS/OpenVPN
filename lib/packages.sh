@@ -63,13 +63,20 @@ pkg_install_ui_tool() {
 
 pkg_install_core() {
     # openvpn + easy-rsa + tooling needed by every install
-    local -a pkgs
+    local -a pkgs=(openvpn easy-rsa openssl ca-certificates curl)
+    log_info "Installing core packages: ${pkgs[*]}"
     case "$PKG_MANAGER" in
-        apt)    pkgs=(openvpn easy-rsa openssl ca-certificates curl) ;;
-        dnf|yum) pkgs=(openvpn easy-rsa openssl ca-certificates curl) ;;
-        pacman) pkgs=(openvpn easy-rsa openssl ca-certificates curl) ;;
-    esac
-    pkg_install "${pkgs[@]}"
+        apt)
+            # --no-install-recommends keeps the smart-card stack (pcscd,
+            # opensc, libccid) off headless servers: openvpn only recommends
+            # it, nothing in this tool uses it, and its postinst ordering
+            # prints a scary (harmless) pcscd.service failure during install.
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
+                -o DPkg::Lock::Timeout=300 --no-install-recommends \
+                "${pkgs[@]}" </dev/null ;;
+        *)
+            pkg_install "${pkgs[@]}" ;;
+    esac || return 1
     # iptables is only required for the raw-iptables firewall backend
     command -v iptables >/dev/null 2>&1 || pkg_install_best_effort iptables
 }
