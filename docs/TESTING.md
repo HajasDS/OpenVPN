@@ -166,6 +166,37 @@ Also verify the audit log after 1–4: lines like `Switch authentication mode �
 | 11 | Pre-1.2.0 config file (no crypto keys) | starts cleanly; defaults identical to the previously hardcoded values; regenerated profiles stay compatible with existing clients |
 | 12 | Corrupt crypto values (`PKI_ALGO=des`, `DATA_CIPHERS=BF-CBC`, `CA_DAYS=999999`) | start: log shows "Crypto settings sanitized …"; menus show the recovered defaults |
 
+### 3.13 Per-user authentication & enforcement scenarios (v2.0.0)
+
+Setup for most rows: fresh install with allowed modes = all five, then users
+`certy` (cert), `pwonly` (password), `pt` (password_totp), `yk` (yubikey),
+`pyk` (password_yubikey), each provisioned during Add user.
+
+| # | Scenario | Pass criteria |
+|---|---|---|
+| 1 | All five users connect **at the same time** | each succeeds with exactly its own factors; `status.log` shows all five |
+| 2 | `certy` connects with no credentials | connects; journal shows no PAM activity for the login |
+| 3 | `pwonly` connects with no credentials (hand-edited profile without `auth-user-pass`) | rejected; journal: `auth-policy: DENY cn=pwonly - mode 'password' requires a username/password login` |
+| 4 | `pt` uses `pwonly`'s username with `pt`'s certificate | rejected: `username does not match the certificate` |
+| 5 | `yk` login: password field = one key touch | connects; replaying the same OTP fails (single-use) |
+| 6 | `pyk` login: password immediately + key touch in one field | connects; wrong password + valid OTP fails; valid password + missing OTP fails |
+| 7 | Enforcement: allowed = {password_totp, password_yubikey} (spec example 1) | impact screen lists `certy`, `pwonly`, `yk`; choosing *apply anyway* needs a default-No confirm; afterwards those three are rejected with `mode … not allowed by the enforcement rules` while `pt`/`pyk` still connect |
+| 8 | Enforcement: same change but choose *update users now* | guided per-user mode pick; updated users connect with new factors; unfixed ones listed as still blocked |
+| 9 | Enforce a single mode (password_totp) for everyone (spec example 3) | non-compliant users listed before apply; after updates, every login requires password+TOTP |
+| 10 | Assign TOTP mode while `pam_google_authenticator` missing | requirements screen (blocking) with install fix; no partial change |
+| 11 | Assign YubiKey mode with no validation service | **blocking** requirement with configure fix; after configuring inline, assignment continues |
+| 12 | Assign a mode not in the allowed list | blocked with "edit the allowed modes now" fix that opens the enforcement checklist |
+| 13 | Cancel the password prompt mid-assignment | "nothing has been changed"; user keeps the old mode (verify with a login) |
+| 14 | Per-user screen: password_totp → *Remove TOTP* | mode becomes password; offered (default No) to delete the secret; login now needs only password |
+| 15 | Revoke `pt` | policy entry, account, groups, secret, profile all gone; `auth-policy.conf` has no `pt` line |
+| 16 | Cert exists but policy entry deleted by hand | login rejected (`no policy entry`); Validate screen FAILs the user; re-assigning a mode fixes it |
+| 17 | `Validate authentication configuration` on a healthy setup | all PASS; then break one thing (e.g. remove a gate group with `gpasswd -d`) and re-run → targeted FAIL line |
+| 18 | v1.x upgrade: install v1.2.2 in mode password_totp with 2 users (one without a TOTP secret), then run v2 | migration summary proposes password_totp + downgrade-to-password for the unenrolled user; after apply both users connect; declining leaves v1 behaviour running and menus locked behind the migration offer |
+| 19 | v1.x `password_yubikey` upgrade | migration warns that the login format changed and offers regenerating all profiles; old profile fails, new one connects |
+| 20 | Interrupted configuration: kill the tool between TOTP enrollment and commit | user keeps the old mode; re-running the tool shows a consistent state (stray secret is inert); Validate screen clean |
+
+Also verify after 3, 4, 7: journal `auth-policy: DENY` lines contain the CN and a fixed reason only — never passwords, OTP values or secrets.
+
 ## 4. Regression quick-list
 
-After any code change, minimally re-run: 3.1(1), 3.2(1), 3.3, 3.5(2), 3.6(2), 3.10.
+After any code change, minimally re-run: 3.1(1), 3.2(1), 3.3, 3.5(2), 3.6(2), 3.10, 3.13(1).

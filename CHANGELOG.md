@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.0.0 — 2026-07-09
+
+### Added
+- **Per-user authentication modes** ([docs/AUTHENTICATION.md](docs/AUTHENTICATION.md)). Every user now has their own mode — certificate-only, password, password+TOTP, YubiKey OTP, or password+YubiKey — and users with different modes connect to the same server at the same time. Architecture: a fail-closed, unprivileged policy gate (`auth-user-pass-verify` script + `auth-user-pass-optional`, policy file with **no secrets**) decides per certificate CN which factors are required and enforces username = CN; one generated PAM stack verifies the credentials, with `pam_succeed_if` group gates (`ovm-password`/`ovm-totp`/`ovm-yubikey`) running only the modules matching each user's mode. Unknown certificates, missing policy files and non-compliant modes are all rejected (fail-closed).
+- **Global enforcement rules**: a multi-select allowed-modes list plus a default mode for new users. Assigning a disallowed mode is blocked in the UI (with a one-tap jump to edit the list); the policy layer rejects non-compliant logins at connect time. Shrinking the list shows exactly which users become non-compliant and offers guided updates, an explicit default-No "apply anyway (blocks them)", or cancel — nobody is silently locked out.
+- **Per-user authentication screen** (Authentication → User authentication modes, also linked from User management): view/change mode (only allowed modes selectable), quick add/remove factor transitions, set/change password, show/reset TOTP QR, register/replace YubiKey, return to certificate-only, regenerate profile. Mode changes validate everything first, provision prerequisites (account, password, TOTP QR, key registration) before the atomic policy+groups commit, and abort cleanly at any cancelled step.
+- **"Validate authentication configuration"** report: audits policy file ↔ config ↔ gate groups ↔ accounts ↔ password states ↔ TOTP secrets ↔ YubiKey registrations ↔ PAM ↔ server.conf ↔ certificates as PASS/WARN/FAIL lines.
+- **Automatic migration from the v1.x global mode**: proposes allowed = {old mode} and per-user assignments, downgrading users with incomplete enrollment (listed) so nobody is locked out; nothing changes until confirmed, and declining leaves the running v1 configuration untouched. New users are provisioned per-mode during Add user; the installer gained an allowed-modes step.
+- New `lib/policy.sh` (policy store + generated `auth-policy.sh`/`pam-allow-empty.sh`), multi-select (`ui_checklist`) and radiolist UI widgets, `allow_*`/`assign_*` dependency-validation features with an "edit allowed modes" fix action.
+
+### Changed
+- **password+YubiKey login format**: the OTP is now typed at the END of the password field (pam_yubico's native append-and-strip flow) instead of a separate challenge prompt — required so both YubiKey modes can coexist; the challenge channel stays reserved for TOTP. Migration offers to regenerate all profiles and v1.x password+YubiKey profiles must be redistributed.
+- Certificate-only users no longer need (or get) a system account; accounts of modes without a password factor are password-locked. `server.conf` always carries the policy gate; the PAM plugin line is emitted only when a credential mode is in use.
+- Username↔certificate matching is now always enforced by the policy layer (the v1.x toggle was removed); the global TOTP `nullok` toggle is obsolete — enrollment is guaranteed per user at assignment time.
+- Legacy config keys `AUTH_MODE`/`TOTP_NULLOK`/`ENFORCE_CN_MATCH` are still parsed (for migration) but no longer drive behaviour.
+
+### Security
+- The policy file/script layer contains and logs no secrets; policy denials log the CN and a fixed reason only. Missing PAM plugin with credential modes in use makes OpenVPN fail to start (visible) instead of skipping credential checks. Credentials of one user can never be combined with another user's certificate.
+
 ## 1.2.2 — 2026-07-08
 
 ### Fixed

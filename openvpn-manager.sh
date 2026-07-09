@@ -20,7 +20,7 @@ umask 077
 OVM_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly OVM_ROOT
 
-for _mod in common os ui packages certs firewall service crypto openvpn users auth totp yubikey checks; do
+for _mod in common os ui packages certs firewall service crypto policy openvpn users auth totp yubikey checks; do
     # shellcheck source=/dev/null
     source "${OVM_ROOT}/lib/${_mod}.sh" \
         || { printf 'FATAL: cannot load lib/%s.sh\n' "${_mod}" >&2; exit 1; }
@@ -37,7 +37,7 @@ status_summary() {
     users="$(cert_list_valid_clients 2>/dev/null | wc -l)"
     printf 'Service: %s | %s:%s/%s | Users: %s | Auth: %s | FW: %s' \
         "${svc^^}" "${ENDPOINT:-—}" "${PORT}" "${PROTOCOL}" \
-        "$users" "$(auth_mode_label)" "$fw"
+        "$users" "$(auth_status_label)" "$fw"
 }
 
 firewall_menu() {
@@ -130,7 +130,7 @@ Choose Install to repair - remnants are backed up and replaced."
 
         choice="$(ui_menu "OpenVPN Manager" "$(status_summary)" \
             "users"     "User management  (add / revoke / list / profiles)" \
-            "auth"      "Authentication   (password, TOTP, YubiKey)" \
+            "auth"      "Authentication   (per-user modes, enforcement, 2FA)" \
             "service"   "Service control  (status, restart, journal)" \
             "settings"  "Server configuration  (port, protocol, DNS, endpoint)" \
             "firewall"  "Firewall / NAT rules" \
@@ -167,7 +167,7 @@ main() {
     crypto_sanitize
     ui_init
 
-    log_info "openvpn-manager v${OVM_VERSION} started on ${OS_NAME} (auth mode: ${AUTH_MODE})"
+    log_info "openvpn-manager v${OVM_VERSION} started on ${OS_NAME}"
 
     if [[ "$OS_SUPPORT" == "besteffort" ]]; then
         ui_yesno "Unverified distribution" \
@@ -175,6 +175,12 @@ main() {
 (Ubuntu 20.04+/Debian 11+). The tool will try its best.
 
 Continue at your own risk?" defaultno || exit 0
+    fi
+
+    # v1.x installs carry a single global auth mode - offer the upgrade to
+    # per-user authentication once, before entering the menus.
+    if openvpn_is_installed && ! policy_ready; then
+        auth_migrate_v2 || log_warn "Per-user authentication migration postponed"
     fi
 
     main_menu

@@ -10,37 +10,6 @@
 # never written to the log. The screen is cleared afterwards.
 # =============================================================================
 
-totp_menu() {
-    while true; do
-        local choice
-        choice="$(ui_menu "TOTP management" \
-            "Server TOTP policy: $( [[ $AUTH_MODE == password_totp ]] && echo "ACTIVE (optional-per-user: ${TOTP_NULLOK})" || echo "inactive (mode: $(auth_mode_label))" )" \
-            "generate" "Generate / enable TOTP for a user (shows QR code)" \
-            "show"     "Show enrollment QR code again for a user" \
-            "reset"    "Reset a user's TOTP (new secret)" \
-            "disable"  "Disable TOTP for a user (delete secret)" \
-            "list"     "List TOTP status of all users" \
-            "nullok"   "Toggle per-user-optional TOTP (now: ${TOTP_NULLOK})" \
-            "enable"   "Enable TOTP globally (switch mode to password+TOTP)" \
-            "back"     "Back")" || return 0
-        case "$choice" in
-            generate) _totp_pick_user "Enable TOTP" totp_generate ;;
-            show)     _totp_pick_user "Show QR code" totp_show ;;
-            reset)    _totp_pick_user "Reset TOTP" totp_reset ;;
-            disable)  _totp_pick_user "Disable TOTP" totp_disable ;;
-            list)     totp_list ;;
-            nullok)   totp_toggle_nullok ;;
-            enable)
-                if [[ "$AUTH_MODE" == "password_totp" ]]; then
-                    ui_msg "TOTP" "Password + TOTP mode is already active."
-                else
-                    apply_auth_mode "password_totp"
-                fi ;;
-            back)     return 0 ;;
-        esac
-    done
-}
-
 _totp_pick_user() { # _totp_pick_user "Title" callback
     local name
     name="$(user_select "$1")" || return 0
@@ -78,12 +47,14 @@ Replace it?" defaultno || return 0
     log_info "TOTP enabled for user: ${user}"     # never log the secret
     _totp_display "$user" "$secret"
 
-    if [[ "$AUTH_MODE" != "password_totp" ]]; then
+    local umode
+    umode="$(policy_user_mode "$user" 2>/dev/null || echo cert)"
+    if [[ -z "${OVM_SUPPRESS_MODE_WARN:-}" ]] && ! mode_uses_totp "$umode"; then
         ui_msg "Note" \
-"The secret is stored, but the server is not in 'password + TOTP' mode
-yet, so it is not being asked for at login.
+"The secret is stored, but '${user}' uses mode '$(auth_mode_label "$umode")',
+so no TOTP code is requested at login yet.
 
-Enable it under: Authentication -> Change authentication mode."
+Change it under: Authentication -> User authentication modes."
     fi
 }
 
@@ -105,11 +76,11 @@ app entry will stop working immediately." defaultno || return 0
 }
 
 totp_disable() {
-    local user="$1" file="${OVM_TOTP_DIR}/$1"
+    local user="$1" file="${OVM_TOTP_DIR}/$1" umode warn=""
     [[ -f "$file" ]] || { ui_msg "TOTP" "'${user}' has no TOTP secret."; return 0; }
-    local warn=""
-    [[ "$AUTH_MODE" == "password_totp" && "$TOTP_NULLOK" != "yes" ]] && \
-        warn=$'\n\nWARNING: TOTP is MANDATORY on this server, so this user will\nnot be able to log in until a new secret is generated.'
+    umode="$(policy_user_mode "$user" 2>/dev/null || echo cert)"
+    mode_uses_totp "$umode" && \
+        warn=$'\n\nWARNING: this user'\''s mode REQUIRES a TOTP code - they will NOT\nbe able to log in until a new secret is generated or their mode is\nchanged (Authentication -> User authentication modes).'
     ui_yesno "Disable TOTP" "Delete the TOTP secret of '${user}'?${warn}" defaultno || return 0
     shred -u "$file" 2>/dev/null || rm -f "$file"
     log_info "TOTP disabled for user: ${user}"
@@ -128,28 +99,6 @@ totp_list() {
     done < <(cert_list_valid_clients)
     [[ -z "$text" ]] && text="(no users)"
     ui_show_text "TOTP status" "$text"
-}
-
-totp_toggle_nullok() {
-    local new="yes"
-    [[ "$TOTP_NULLOK" == "yes" ]] && new="no"
-    ui_yesno "Per-user TOTP" \
-"$( if [[ $new == yes ]]; then
-  echo 'Make TOTP OPTIONAL per user: users WITH a secret must provide a
-code, users WITHOUT one log in with password only.'
-else
-  echo 'Make TOTP MANDATORY for everyone: users without an enrolled
-secret will NOT be able to log in.'
-fi )
-
-Apply?" || return 0
-    TOTP_NULLOK="$new"
-    config_set TOTP_NULLOK "$new"
-    log_info "TOTP nullok set to ${new}"
-    if [[ "$AUTH_MODE" == "password_totp" ]]; then
-        write_pam_file
-        ui_msg "TOTP" "Policy updated (PAM configuration rewritten). No restart needed."
-    fi
 }
 
 # -----------------------------------------------------------------------------

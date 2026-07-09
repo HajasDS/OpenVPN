@@ -17,38 +17,6 @@
 
 readonly YUBICO_DEFAULT_API="https://api.yubico.com/wsapi/2.0/verify"
 
-yubikey_menu() {
-    while true; do
-        local api="not configured" choice
-        [[ -n "$YUBICO_ID" ]] && api="YubiCloud (client id ${YUBICO_ID})"
-        [[ -n "$YUBICO_URL" ]] && api="self-hosted: ${YUBICO_URL}"
-        choice="$(ui_menu "YubiKey management" "Validation service: ${api}" \
-            "register"   "Register a YubiKey for a user" \
-            "test"       "Validate a test OTP (checks the whole chain)" \
-            "unregister" "Remove a user's YubiKey registration" \
-            "list"       "List registered YubiKeys" \
-            "api"        "Configure validation service (API key / URL)" \
-            "enable"     "Enable a YubiKey authentication mode" \
-            "help"       "Setup instructions" \
-            "back"       "Back")" || return 0
-        case "$choice" in
-            register)   _yubi_pick_user "Register YubiKey" yubikey_register ;;
-            test)       yubikey_test ;;
-            unregister) _yubi_pick_user "Remove YubiKey" yubikey_unregister ;;
-            list)       yubikey_list ;;
-            api)        yubikey_configure_api ;;
-            enable)
-                local m
-                m="$(ui_menu "YubiKey mode" "Which combination?" \
-                    "yubikey"          "Certificate + YubiKey OTP" \
-                    "password_yubikey" "Certificate + password + YubiKey OTP")" || continue
-                apply_auth_mode "$m" ;;
-            help)       yubikey_instructions ;;
-            back)       return 0 ;;
-        esac
-    done
-}
-
 _yubi_pick_user() {
     local name
     name="$(user_select "$1")" || return 0
@@ -98,8 +66,8 @@ You will receive a numeric Client ID and a base64 Secret Key."
     config_set YUBICO_URL "$YUBICO_URL"
     log_info "YubiKey validation service configured (id=${YUBICO_ID}, self-hosted=$([[ -n $YUBICO_URL ]] && echo yes || echo no))"
 
-    # PAM references id/key/url -> rewrite if a yubikey mode is active
-    if [[ "$AUTH_MODE" == "yubikey" || "$AUTH_MODE" == "password_yubikey" ]]; then
+    # PAM references id/key/url -> rewrite if any YubiKey mode is in use
+    if [[ -f "$PAM_FILE" ]] && _auth_family_active yubikey; then
         write_pam_file
     fi
     ui_msg "Saved" "Validation service configured. PAM re-reads it on the next login (no restart needed)."
@@ -192,9 +160,10 @@ yubikey_unregister() {
         ui_msg "YubiKey" "'${user}' has no registered YubiKey."
         return 0
     fi
-    local warn=""
-    [[ "$AUTH_MODE" == "yubikey" || "$AUTH_MODE" == "password_yubikey" ]] && \
-        warn=$'\n\nWARNING: YubiKey OTP is required on this server - the user\nwill not be able to log in afterwards.'
+    local warn="" umode
+    umode="$(policy_user_mode "$user" 2>/dev/null || echo cert)"
+    mode_uses_yubikey "$umode" && \
+        warn=$'\n\nWARNING: this user'\''s mode REQUIRES a YubiKey OTP - they will not\nbe able to log in afterwards until a key is registered again or their\nmode is changed.'
     ui_yesno "Remove YubiKey" "Remove all YubiKey registrations of '${user}'?${warn}" defaultno || return 0
     sed -i "/^${user}:/d" "$OVM_YUBI_AUTHFILE"
     log_info "YubiKey registration removed for user: ${user}"
@@ -265,23 +234,26 @@ yubikey_instructions() {
   confirms it is genuine and has never been used before.
 
 SERVER SETUP
-  1. Authentication -> YubiKey management -> Configure validation service
+  1. Authentication -> Global authentication features ->
+     Configure the YubiKey validation service
      - YubiCloud: get a free API key at
        https://upgrade.yubico.com/getapikey/
      - or point it at your own yubikey-val server.
-  2. Register each user's key (they just touch it once).
-  3. 'Validate a test OTP' to confirm the whole chain.
-  4. Enable a YubiKey authentication mode.
-  5. Regenerate and redistribute the client .ovpn profiles.
+  2. 'Validate a test OTP' to confirm the whole chain.
+  3. Allow a YubiKey mode under Global enforcement rules.
+  4. Assign the mode per user (Authentication -> User authentication
+     modes) - the key is registered during assignment (one touch).
+  5. Distribute the regenerated .ovpn profiles.
 
 CLIENT LOGIN
   - Mode 'certificate + YubiKey': username = VPN username,
-    password field = touch the YubiKey.
-  - Mode 'certificate + password + YubiKey': enter the password,
-    then touch the key at the challenge prompt.
+    password field = just touch the YubiKey.
+  - Mode 'certificate + password + YubiKey': in the password field
+    type the password and IMMEDIATELY touch the key - the one-time
+    code is appended to the end and the server splits and verifies
+    both parts (standard pam_yubico flow).
 
 REQUIREMENTS
   - The VPN server needs outbound HTTPS to the validation service.
-  - Keys must be registered (user -> public ID mapping) before login.
-  - OpenVPN client >= 2.5 for the challenge-based combined mode."
+  - Keys must be registered (user -> public ID mapping) before login."
 }

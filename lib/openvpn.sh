@@ -91,6 +91,9 @@ Enable IPv6 inside the VPN tunnel as well?" \
     # Cryptographic settings: review/customize BEFORE anything is generated.
     crypto_install_menu || return 0
 
+    # Allowed authentication modes (per-user; changeable later).
+    _choose_auth_modes || return 0   # sets WIZ_ALLOWED WIZ_DEFAULT
+
     ui_yesno "Confirm installation" \
 "Ready to install with these settings:
 
@@ -99,19 +102,20 @@ Enable IPv6 inside the VPN tunnel as well?" \
   VPN subnet: ${VPN_CIDR4}$( [[ $ipv6 == yes ]] && printf ' + %s' "$VPN_SUBNET6" )
   DNS:        ${DNS_LABEL} (${DNS1}${DNS2:+, ${DNS2}})
   Crypto:     $(crypto_short_desc)
-  Auth mode:  certificate only (changeable later in the Authentication menu)
+  Auth modes: ${WIZ_ALLOWED} (default: ${WIZ_DEFAULT}; per-user, changeable later)
 
 Proceed?" || return 0
 
     # ---- Persist settings, then build everything from them --------------------
     ENDPOINT="$endpoint" PORT="$port" PROTOCOL="$proto"
-    IPV6_ENABLED="$ipv6" NIC="$nic" AUTH_MODE="cert"
+    IPV6_ENABLED="$ipv6" NIC="$nic"
+    AUTH_ALLOWED_MODES="$WIZ_ALLOWED" AUTH_DEFAULT_MODE="$WIZ_DEFAULT"
     config_set ENDPOINT "$ENDPOINT";     config_set PORT "$PORT"
     config_set PROTOCOL "$PROTOCOL";     config_set IPV6_ENABLED "$IPV6_ENABLED"
-    config_set NIC "$NIC";               config_set AUTH_MODE "$AUTH_MODE"
+    config_set NIC "$NIC"
+    config_set AUTH_ALLOWED_MODES "$AUTH_ALLOWED_MODES"
+    config_set AUTH_DEFAULT_MODE "$AUTH_DEFAULT_MODE"
     config_set DNS1 "$DNS1"; config_set DNS2 "$DNS2"; config_set DNS_LABEL "$DNS_LABEL"
-    config_set TOTP_NULLOK "$TOTP_NULLOK"
-    config_set ENFORCE_CN_MATCH "$ENFORCE_CN_MATCH"
     crypto_persist
 
     log_info "Installation started (endpoint=${ENDPOINT} port=${PORT}/${PROTOCOL} ipv6=${IPV6_ENABLED})"
@@ -135,6 +139,14 @@ Check network connectivity and the output above."
 See the output above and ${OVM_LOG_FILE}."
         return 1
     fi
+    # PAM modules for the allowed OTP families (best-effort: assignments
+    # re-validate and offer installation again if these fail here).
+    if [[ " ${AUTH_ALLOWED_MODES} " == *" password_totp "* ]]; then
+        ui_run "Install TOTP PAM module (pam_google_authenticator)" pkg_install_totp || true
+    fi
+    if [[ " ${AUTH_ALLOWED_MODES} " == *" yubikey "* || " ${AUTH_ALLOWED_MODES} " == *" password_yubikey "* ]]; then
+        ui_run "Install YubiKey PAM module (pam_yubico)" pkg_install_yubico || true
+    fi
     if ! ui_run "Validate crypto settings against installed OpenVPN/OpenSSL" crypto_validate_runtime; then
         ui_pause; ui_resume_tui
         if ui_yesno "Unsupported crypto settings" \
@@ -154,6 +166,7 @@ Reset to the recommended modern defaults and continue?"; then
         return 1
     fi
 
+    ui_run "Write authentication policy (per-user modes)" _install_auth_artifacts
     ui_run "Write server configuration" write_server_conf
     ui_run "Write client profile template" write_client_template
     ui_run "Enable IP forwarding (sysctl)" write_sysctl
@@ -198,6 +211,47 @@ Reset to the recommended modern defaults and continue?"; then
 }
 
 _valid_nic() { ip link show "$1" >/dev/null 2>&1; }
+
+_choose_auth_modes() { # sets WIZ_ALLOWED (space-separated) + WIZ_DEFAULT
+    local sel
+    sel="$(ui_checklist "Allowed authentication modes" \
+"Every user always needs a client certificate. Select which modes users
+MAY be assigned - each user gets their own mode later. TOTP/YubiKey
+PAM modules are installed automatically if selected here." \
+        "cert"             "Certificate only" on \
+        "password"         "Certificate + password" off \
+        "password_totp"    "Certificate + password + TOTP" off \
+        "yubikey"          "Certificate + YubiKey OTP" off \
+        "password_yubikey" "Certificate + password + YubiKey OTP" off)" || return 1
+    [[ -z "$sel" ]] && sel="cert"
+    WIZ_ALLOWED="$sel"
+    WIZ_DEFAULT="${sel%% *}"
+    local -a arr=()
+    read -r -a arr <<< "$sel"
+    if (( ${#arr[@]} > 1 )); then
+        local m state
+        local -a args=()
+        for m in "${arr[@]}"; do
+            state="off"; [[ "$m" == "$WIZ_DEFAULT" ]] && state="on"
+            args+=("$m" "$(auth_mode_label "$m")" "$state")
+        done
+        WIZ_DEFAULT="$(ui_radiolist "Default mode for new users" \
+            "Preselected when adding a VPN user (changeable per user):" \
+            "${args[@]}")" || return 1
+        [[ -z "$WIZ_DEFAULT" ]] && WIZ_DEFAULT="${arr[0]}"
+    fi
+    return 0
+}
+
+_install_auth_artifacts() {
+    # Policy file (header only - users are added later), the two helper
+    # scripts and, if any credential mode is allowed, the PAM stack.
+    groupadd -f "$VPN_GROUP"
+    write_pam_empty_script \
+        && write_policy_script \
+        && policy_sync_header \
+        && write_pam_file
+}
 
 _choose_dns() {
     local choice
@@ -305,7 +359,7 @@ write_server_conf() {
         [[ "$PROTOCOL" == "udp" ]] && echo "explicit-exit-notify 1"
     } > "$OVPN_SERVER_CONF"
     chmod 600 "$OVPN_SERVER_CONF"
-    log_info "server.conf regenerated (auth mode: ${AUTH_MODE})"
+    log_info "server.conf regenerated (allowed auth modes: ${AUTH_ALLOWED_MODES:-cert})"
 }
 
 write_client_template() {
@@ -491,6 +545,10 @@ _uninstall_core_quiet() {
     fi
 
     rm -f "$PAM_FILE"
+    local g
+    for g in "$OVM_GRP_PASSWORD" "$OVM_GRP_TOTP" "$OVM_GRP_YUBIKEY"; do
+        groupdel "$g" >/dev/null 2>&1 || true
+    done
     rm -rf /etc/openvpn
     rm -rf /var/log/openvpn
     # Wipe secrets and client material managed by this tool

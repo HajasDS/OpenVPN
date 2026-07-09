@@ -9,12 +9,14 @@
 # =============================================================================
 
 user_menu() {
+    auth_require_v2 || return 0
     while true; do
         local choice
         choice="$(ui_menu "User management" \
-            "Auth mode: $(auth_mode_label)   Users: $(cert_list_valid_clients | wc -l)" \
+            "Users: $(cert_list_valid_clients | wc -l)   Default mode: $(auth_mode_label "${AUTH_DEFAULT_MODE:-cert}")" \
             "add"      "Add a new VPN user" \
             "list"     "List users and their status" \
+            "auth"     "Per-user authentication settings" \
             "revoke"   "Revoke a user (certificate + access)" \
             "regen"    "Regenerate a client profile (.ovpn)" \
             "regenall" "Regenerate ALL client profiles" \
@@ -24,6 +26,7 @@ user_menu() {
         case "$choice" in
             add)      user_add ;;
             list)     user_list ;;
+            auth)     auth_user_menu_pick ;;
             revoke)   user_revoke ;;
             regen)    user_regenerate_profile ;;
             regenall) user_regenerate_all_profiles ;;
@@ -51,12 +54,13 @@ user_select() { # user_select "Title" -> prints chosen username
     ui_menu "$title" "Select a user:" "${items[@]}"
 }
 
-_user_flags() { # short status string for menus
-    local u="$1" f=""
+_user_flags() { # short status string for menus: "mode | enrollment"
+    local u="$1" f="" m
+    m="$(policy_user_mode "$u" 2>/dev/null || echo "-")"
     _has_system_account "$u" && f+="account "
     [[ -f "${OVM_TOTP_DIR}/${u}" ]] && f+="TOTP "
     grep -q "^${u}:" "$OVM_YUBI_AUTHFILE" 2>/dev/null && f+="YubiKey "
-    printf '%s' "${f:-certificate only}"
+    printf '%s | %s' "$m" "${f:-cert only}"
 }
 
 _has_system_account() { id -u "$1" >/dev/null 2>&1; }
@@ -73,6 +77,7 @@ _is_vpn_account() { # true if the account's primary group is VPN_GROUP
 # -----------------------------------------------------------------------------
 
 user_add() {
+    auth_require_v2 || return 0
     # PKI must be healthy before we try to issue anything (covers partially
     # installed / interrupted setups).
     require_feature "user_add" "" "Add a new VPN user" || return 0
@@ -98,6 +103,26 @@ VPN with their existing system password.
 Use this existing account for the VPN anyway?" defaultno || return 0
     fi
 
+    # Pick the authentication mode BEFORE issuing anything, and validate its
+    # global prerequisites (packages, API, enforcement) up front.
+    local mode="${AUTH_DEFAULT_MODE:-cert}"
+    local -a marr=()
+    read -r -a marr <<< "${AUTH_ALLOWED_MODES:-cert}"
+    if (( ${#marr[@]} > 1 )); then
+        local m state
+        local -a args=()
+        for m in "${marr[@]}"; do
+            state="off"; [[ "$m" == "$mode" ]] && state="on"
+            args+=("$m" "$(auth_mode_label "$m")" "$state")
+        done
+        mode="$(ui_radiolist "Authentication mode for '${name}'" \
+            "A certificate is always issued. What must this user present in addition?" \
+            "${args[@]}")" || return 0
+        [[ -z "$mode" ]] && mode="${AUTH_DEFAULT_MODE:-cert}"
+    fi
+    require_feature "allow_${mode}" "" \
+        "Add user '${name}' with mode '$(auth_mode_label "$mode")'" || return 0
+
     # Optional passphrase on the client private key
     local passfile=""
     if ui_yesno "Private key" \
@@ -121,34 +146,32 @@ Recommended for laptops that may be lost or stolen." defaultno; then
     [[ -n "$passfile" ]] && shred -u "$passfile" 2>/dev/null
     log_info "User created: ${name}"
 
-    # System account + credentials for the active auth mode
-    if [[ "$AUTH_MODE" != "cert" ]]; then
-        _ensure_system_account "$name" || return 1
-        case "$AUTH_MODE" in
-            password|password_totp|password_yubikey)
-                _set_account_password "$name" || true ;;
-        esac
-        case "$AUTH_MODE" in
-            password_totp)
-                if [[ "$TOTP_NULLOK" == "yes" ]]; then
-                    ui_yesno "TOTP" "Generate a TOTP secret for '${name}' now?
-(Per-user TOTP is optional on this server.)" \
-                        && totp_generate "$name"
-                else
-                    ui_msg "TOTP required" "TOTP is mandatory on this server. A secret will be generated now."
-                    totp_generate "$name"
-                fi ;;
-        esac
-        case "$AUTH_MODE" in
-            yubikey|password_yubikey)
-                ui_msg "YubiKey required" "This server requires YubiKey OTP. Register '${name}'s key now."
-                yubikey_register "$name" ;;
-        esac
+    # Provision credentials + policy entry for the chosen mode. If the admin
+    # aborts halfway (e.g. cancels the password prompt), fall back to a safe
+    # certificate-only entry so the user is never left in a blocked
+    # no-policy state.
+    if ! user_set_auth_mode "$name" "$mode" quiet; then
+        if _mode_is_allowed "cert"; then
+            policy_set_user "$name" "cert"
+            auth_refresh_stack
+            ui_msg "Mode not applied" \
+"Provisioning for '$(auth_mode_label "$mode")' was not completed.
+'${name}' was saved as CERTIFICATE-ONLY instead - change it later under
+Authentication -> User authentication modes."
+        else
+            policy_set_user "$name" "$mode"
+            auth_refresh_stack
+            ui_msg "Enrollment incomplete" \
+"'${name}' is stored with mode '$(auth_mode_label "$mode")' but the
+enrollment is incomplete - the user CANNOT log in yet. Finish it under
+Authentication -> User authentication modes."
+        fi
     fi
 
     build_client_profile "$name"
     ui_msg "User added" \
 "VPN user '${name}' is ready.
+Mode: $(auth_mode_label "$(policy_user_mode "$name" 2>/dev/null || echo cert)")
 
 Client profile (transfer it over a SECURE channel, then consider
 deleting it from the server):
@@ -187,12 +210,15 @@ _set_account_password() {
 }
 
 user_set_password() {
-    [[ "$AUTH_MODE" == "cert" ]] && {
-        ui_msg "Not applicable" "The server is in certificate-only mode; there are no VPN passwords."
-        return 0
-    }
-    local name
+    local name mode
     name="$(user_select "Change password")" || return 0
+    mode="$(policy_user_mode "$name" 2>/dev/null || echo cert)"
+    if ! mode_uses_password "$mode"; then
+        ui_msg "Not applicable" \
+"'${name}' uses mode '$(auth_mode_label "$mode")' - it has no VPN password.
+Change the mode first under Authentication -> User authentication modes."
+        return 0
+    fi
     _has_system_account "$name" || _ensure_system_account "$name" || return 1
     _set_account_password "$name"
 }
@@ -222,11 +248,15 @@ Revoke VPN user '${name}'?" defaultno || return 0
             userdel "$name" >/dev/null 2>&1 || true
             log_info "System account removed: ${name}"
         else
-            gpasswd -d "$name" "$VPN_GROUP" >/dev/null 2>&1 || true
-            log_info "Removed ${name} from ${VPN_GROUP} (pre-existing account kept)"
+            local g
+            for g in "$VPN_GROUP" "$OVM_GRP_PASSWORD" "$OVM_GRP_TOTP" "$OVM_GRP_YUBIKEY"; do
+                gpasswd -d "$name" "$g" >/dev/null 2>&1 || true
+            done
+            log_info "Removed ${name} from VPN groups (pre-existing account kept)"
         fi
     fi
 
+    policy_remove_user "$name"
     [[ -f "${OVM_TOTP_DIR}/${name}" ]] && shred -u "${OVM_TOTP_DIR}/${name}" 2>/dev/null
     [[ -f "$OVM_YUBI_AUTHFILE" ]] && sed -i "/^${name}:/d" "$OVM_YUBI_AUTHFILE"
     rm -f "${OVM_CLIENT_DIR}/${name}.ovpn"
@@ -240,9 +270,12 @@ Revoke VPN user '${name}'?" defaultno || return 0
 # -----------------------------------------------------------------------------
 
 user_list() {
-    local u text="" pwstate
+    local u text="" pwstate mode comp
     while IFS= read -r u; do
         [[ -z "$u" ]] && continue
+        mode="$(policy_user_mode "$u" 2>/dev/null || echo "NO-POLICY!")"
+        comp=""
+        [[ "$mode" == "NO-POLICY!" ]] || _mode_is_allowed "$mode" || comp=" [BLOCKED by enforcement]"
         pwstate="-"
         if _has_system_account "$u"; then
             pwstate="$(passwd -S "$u" 2>/dev/null | awk '{print $2}')"
@@ -252,11 +285,11 @@ user_list() {
                 NP)   pwstate="EMPTY!" ;;
             esac
         fi
-        text+="$(printf '%-20s pw:%-8s %s | expires: %s' \
-            "$u" "$pwstate" "$(_user_flags "$u")" "$(cert_expiry "$u")")"$'\n'
+        text+="$(printf '%-20s %-18s pw:%-8s expires: %s%s' \
+            "$u" "$mode" "$pwstate" "$(cert_expiry "$u")" "$comp")"$'\n'
     done < <(cert_list_valid_clients)
     [[ -z "$text" ]] && text="(no active users)"
-    ui_show_text "VPN users  —  auth mode: $(auth_mode_label)" "$text"
+    ui_show_text "VPN users  —  allowed modes: $(_allowed_labels)" "$text"
 }
 
 user_show_profile_path() {
@@ -292,21 +325,30 @@ build_client_profile() { # build_client_profile <name>
     [[ -f "$crt" && -f "$key" ]] || { log_error "Missing cert/key for ${name}"; return 1; }
     [[ -f "$OVM_TEMPLATE_FILE" ]] || write_client_template
 
+    local mode
+    mode="$(policy_user_mode "$name" 2>/dev/null || echo cert)"
+
     umask 077
     {
         cat "$OVM_TEMPLATE_FILE"
-        case "$AUTH_MODE" in
+        case "$mode" in
+            cert)
+                echo "# certificate-only login: no username/password required" ;;
             password)
+                echo "# Login: VPN username + password"
                 echo "auth-user-pass" ;;
             password_totp)
+                echo "# Login: VPN username + password, then the 6-digit code"
                 echo "auth-user-pass"
                 echo 'static-challenge "Enter your 6-digit TOTP code" 1' ;;
             yubikey)
-                echo "# Login: username = VPN username, password = touch your YubiKey"
+                echo "# Login: username = VPN username; password field = touch your YubiKey"
                 echo "auth-user-pass" ;;
             password_yubikey)
-                echo "auth-user-pass"
-                echo 'static-challenge "Insert and touch your YubiKey" 1' ;;
+                echo "# Login: username = VPN username; in the password field type the"
+                echo "# password and IMMEDIATELY touch the YubiKey (its one-time code is"
+                echo "# appended to the end - the server splits and verifies both)."
+                echo "auth-user-pass" ;;
         esac
         echo "<ca>"
         cat "${PKI_DIR}/ca.crt"
@@ -329,7 +371,7 @@ build_client_profile() { # build_client_profile <name>
         fi
     } > "$out"
     chmod 600 "$out"
-    log_info "Client profile generated: ${name}.ovpn (auth mode: ${AUTH_MODE})"
+    log_info "Client profile generated: ${name}.ovpn (auth mode: ${mode})"
 }
 
 user_regenerate_profile() {

@@ -29,26 +29,29 @@ feature entry point
 
 | Action (feature id) | Requirement | Severity | Auto-fix |
 |---|---|---|---|
-| **Switch to password mode** (`mode_password`) | `openvpn-plugin-auth-pam.so` present | blocking | – (reinstall openvpn) |
-| **Switch to password+TOTP** (`mode_password_totp`) | PAM plugin; `pam_google_authenticator.so` | blocking | install package |
-| | ≥1 enrolled TOTP user when TOTP is mandatory | warning | generate a secret now |
-| **Switch to YubiKey modes** (`mode_yubikey`, `mode_password_yubikey`) | PAM plugin; `pam_yubico.so` | blocking | install package |
-| | validation service configured (YubiCloud ID+key *or* self-hosted URL) | blocking | configure now |
-| | ≥1 registered YubiKey (else everyone is locked out) | warning | register a key now |
+| **Allow password mode** (`allow_password`) | `openvpn-plugin-auth-pam.so` present | blocking | – (reinstall openvpn) |
+| **Allow password+TOTP** (`allow_password_totp`) | PAM plugin; `pam_google_authenticator.so` | blocking | install package |
+| **Allow YubiKey modes** (`allow_yubikey`, `allow_password_yubikey`) | PAM plugin; `pam_yubico.so` | blocking | install package |
+| | validation service configured (YubiCloud ID+key *or* self-hosted URL) | warning | configure now |
+| **Assign a mode to a user** (`assign_<mode>`) | everything from the matching `allow_*` check | as above | as above |
+| | the mode is in the allowed-modes list | blocking | edit allowed modes now |
+| | target user exists (valid certificate) | blocking | – (create user first) |
+| | YubiKey modes: validation service configured | **blocking** | configure now |
 | **Register a YubiKey** (`yubikey_register`) | `pam_yubico.so` installed | blocking | install package |
 | | validation service configured | warning | configure now |
 | | target user exists (valid certificate) | blocking | – (create user first) |
-| | a YubiKey auth mode is globally enabled | warning | – (enable after registering) |
+| | the user's own mode includes YubiKey | warning | – (change the mode after registering) |
 | **Test a YubiKey OTP** (`yubikey_test`) | validation service configured; `curl` | blocking | configure now |
 | **Generate TOTP secret** (`totp_generate`) | `pam_google_authenticator.so`; user exists | blocking | install package |
 | **Add VPN user** (`user_add`) | easy-rsa, CA cert, PKI index, tls-crypt key | blocking | – (Reinstall) |
 | **Regenerate client profile** (`profile`) | PKI healthy **and** the user's cert + key exist | blocking | – |
 | *(all auth actions)* | secret files are `0600`/`0400` root-only | warning | chmod now |
 
-Notes on two deliberate orderings:
+Notes on deliberate severities:
 
-- **Registering a key while YubiKey mode is off is allowed** (warning, not blocking) — that is the correct setup order: register keys first, *then* enable the mode. The reverse (enabling the mode with zero registered keys) warns that it would lock every user out.
-- **Enabling mandatory TOTP with zero enrolled users** likewise warns before you lock yourself out; the per-user-optional (`nullok`) policy silences it.
+- **Allowing** a YubiKey mode without a validation service is a *warning* (the service can be configured before the first assignment); **assigning** the mode to a user without one is *blocking* — that user could never log in.
+- **Registering a key while the user's mode has no YubiKey** is allowed (warning) — that is the correct order: register first, then switch the user's mode. During a mode assignment the tool registers the key itself, so the warning is suppressed there.
+- Enrollment coverage can no longer lock everyone out globally: TOTP secrets and YubiKey registrations are created **during** the per-user assignment, and the enforcement screen lists exactly which users a rule change would block before it is applied.
 
 ## Startup-state recovery
 

@@ -235,6 +235,67 @@ ui_menu() { # ui_menu "Title" "Text" tag1 "item1" tag2 "item2" ... -> selected t
     esac
 }
 
+ui_checklist() { # ui_checklist "Title" "Text" tag item on|off ... -> selected tags (space-separated)
+    local title="$1" text="$2"; shift 2
+    case "$UI_TOOL" in
+        plain)
+            local -a tags=() items=() states=()
+            while (( $# >= 3 )); do tags+=("$1"); items+=("$2"); states+=("$3"); shift 3; done
+            local i choice found guard=0
+            while (( guard++ < 50 )); do
+                printf '\n== %s ==\n%s\n' "$title" "$text" >&2
+                for i in "${!tags[@]}"; do
+                    printf '  [%s] %-18s %s\n' \
+                        "$([[ ${states[$i]} == on ]] && echo x || echo ' ')" \
+                        "${tags[$i]}" "${items[$i]}" >&2
+                done
+                read -rp "Type a name to toggle it, Enter = accept, q = cancel: " choice || return 1
+                [[ -z "$choice" ]] && break
+                [[ "$choice" == "q" ]] && return 1
+                found="no"
+                for i in "${!tags[@]}"; do
+                    if [[ "${tags[$i]}" == "$choice" ]]; then
+                        found="yes"
+                        [[ "${states[$i]}" == "on" ]] && states[$i]="off" || states[$i]="on"
+                    fi
+                done
+                [[ "$found" == "no" ]] && printf 'No such item: %s\n' "$choice" >&2
+            done
+            local out=""
+            for i in "${!tags[@]}"; do
+                [[ "${states[$i]}" == "on" ]] && out+="${out:+ }${tags[$i]}"
+            done
+            printf '%s' "$out" ;;
+        *)
+            local n=$(( $# / 3 )) sel
+            (( n > 10 )) && n=10
+            sel="$("$UI_TOOL" --backtitle "$OVM_BACKTITLE" --title "$title" \
+                --checklist "$text" 20 76 "$n" "$@" 3>&1 1>&2 2>&3)" || return 1
+            # whiptail quotes each selected tag; dialog does not - normalize.
+            printf '%s' "$(tr -d '"' <<< "$sel")" ;;
+    esac
+}
+
+ui_radiolist() { # ui_radiolist "Title" "Text" tag item on|off ... -> selected tag
+    local title="$1" text="$2"; shift 2
+    case "$UI_TOOL" in
+        plain)
+            local -a args=()
+            local tag item state
+            while (( $# >= 3 )); do
+                tag="$1" item="$2" state="$3"; shift 3
+                [[ "$state" == "on" ]] && item+=" (current)"
+                args+=("$tag" "$item")
+            done
+            ui_menu "$title" "$text" "${args[@]}" ;;
+        *)
+            local n=$(( $# / 3 ))
+            (( n > 10 )) && n=10
+            "$UI_TOOL" --backtitle "$OVM_BACKTITLE" --title "$title" \
+                --radiolist "$text" 20 76 "$n" "$@" 3>&1 1>&2 2>&3 ;;
+    esac
+}
+
 # --- Text viewers ---------------------------------------------------------------
 
 ui_textfile() { # ui_textfile "Title" /path/to/file

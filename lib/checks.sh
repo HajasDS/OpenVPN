@@ -93,16 +93,37 @@ validate_feature_requirements() { # validate_feature_requirements <feature> <use
             check_yubikey_requirements "register" "$user" ;;
         yubikey_test)
             check_yubikey_requirements "test" "" ;;
-        mode_cert)
-            ;;   # certificate-only mode has no extra prerequisites
-        mode_password)
+
+        # "allow_<mode>": global prerequisites of making a mode available
+        # (enforcement rules / installer / user_add pre-check).
+        allow_cert)
+            ;;   # certificate-only has no extra prerequisites
+        allow_password)
             check_password_auth_requirements ;;
-        mode_password_totp)
+        allow_password_totp)
             check_password_auth_requirements
-            check_totp_requirements "mode" "" ;;
-        mode_yubikey|mode_password_yubikey)
+            check_totp_requirements "allow" "" ;;
+        allow_yubikey|allow_password_yubikey)
             check_password_auth_requirements
-            check_yubikey_requirements "mode" "" ;;
+            check_yubikey_requirements "allow" "" ;;
+
+        # "assign_<mode>": everything needed to give <user> that mode.
+        assign_cert)
+            _check_mode_allowed "cert"
+            _check_user_exists "$user" ;;
+        assign_password)
+            check_password_auth_requirements
+            _check_mode_allowed "password"
+            _check_user_exists "$user" ;;
+        assign_password_totp)
+            check_password_auth_requirements
+            check_totp_requirements "assign" "$user"
+            _check_mode_allowed "password_totp" ;;
+        assign_yubikey|assign_password_yubikey)
+            check_password_auth_requirements
+            check_yubikey_requirements "assign" "$user"
+            _check_mode_allowed "${feature#assign_}" ;;
+
         totp_generate)
             check_totp_requirements "generate" "$user" ;;
         user_add)
@@ -131,7 +152,7 @@ check_password_auth_requirements() {
     _check_secret_perms
 }
 
-check_totp_requirements() { # check_totp_requirements <context: mode|generate> <user|"">
+check_totp_requirements() { # check_totp_requirements <context: allow|assign|generate> <user|"">
     local context="$1" user="${2:-}"
 
     find_pam_module pam_google_authenticator.so || req_fail blocking \
@@ -140,24 +161,16 @@ check_totp_requirements() { # check_totp_requirements <context: mode|generate> <
         "install_totp_pam" "Install the libpam-google-authenticator package."
 
     case "$context" in
-        generate)
+        generate|assign)
             _check_user_exists "$user"
             ;;
-        mode)
-            # Enabling mandatory TOTP with zero enrolled users locks everyone out.
-            if [[ "$TOTP_NULLOK" != "yes" ]] \
-                    && [[ -n "$(cert_list_valid_clients 2>/dev/null)" ]] \
-                    && ! ls "$OVM_TOTP_DIR"/* >/dev/null 2>&1; then
-                req_fail warning "TOTP enrollment" \
-                    "No user has a TOTP secret yet and TOTP is mandatory - every login would fail until users enroll." \
-                    "generate_totp" "Generate a TOTP secret for at least one user, or enable the per-user-optional policy."
-            fi
-            ;;
+        allow)
+            ;;   # availability only - enrollment happens per user at assign time
     esac
     _check_secret_perms
 }
 
-check_yubikey_requirements() { # check_yubikey_requirements <context: register|test|mode> <user|"">
+check_yubikey_requirements() { # check_yubikey_requirements <context: register|test|allow|assign> <user|"">
     local context="$1" user="${2:-}"
 
     if [[ "$context" != "test" ]]; then
@@ -171,10 +184,12 @@ check_yubikey_requirements() { # check_yubikey_requirements <context: register|t
         register)
             _check_yubico_api warning
             _check_user_exists "$user"
-            if [[ "$AUTH_MODE" != "yubikey" && "$AUTH_MODE" != "password_yubikey" ]]; then
-                req_fail warning "Global YubiKey authentication" \
-                    "Server auth mode is '$(auth_mode_label)'; a registered key is stored but NOT requested at login until a YubiKey mode is enabled." \
-                    "-" "Register keys first, then enable a YubiKey mode under Authentication -> Change mode."
+            local umode
+            umode="$(policy_user_mode "$user" 2>/dev/null || echo cert)"
+            if [[ -z "${OVM_SUPPRESS_MODE_WARN:-}" ]] && ! mode_uses_yubikey "$umode"; then
+                req_fail warning "User's authentication mode" \
+                    "'${user:-?}' uses '$(auth_mode_label "$umode")'; the key is stored but NOT requested at login until the user's mode includes YubiKey." \
+                    "-" "Register the key, then change the mode under Authentication -> User authentication modes."
             fi
             ;;
         test)
@@ -183,16 +198,25 @@ check_yubikey_requirements() { # check_yubikey_requirements <context: register|t
                 "curl" "Needed to reach the OTP validation service over HTTPS." \
                 "-" "Install the curl package."
             ;;
-        mode)
+        allow)
+            # OTPs are useless without a validation service, but it can still
+            # be configured before the first user is assigned -> warning here.
+            _check_yubico_api warning
+            ;;
+        assign)
+            # An assigned user must actually be able to log in -> blocking.
             _check_yubico_api blocking
-            if ! grep -q ':' "$OVM_YUBI_AUTHFILE" 2>/dev/null; then
-                req_fail warning "Registered YubiKeys" \
-                    "No user has a registered YubiKey - enabling this mode would lock every user out." \
-                    "register_yubikey" "Register at least one user's YubiKey first."
-            fi
+            _check_user_exists "$user"
             ;;
     esac
     _check_secret_perms
+}
+
+_check_mode_allowed() { # _check_mode_allowed <mode>
+    [[ " ${AUTH_ALLOWED_MODES:-cert} " == *" $1 "* ]] && return 0
+    req_fail blocking "Mode allowed by enforcement rules" \
+        "'$(auth_mode_label "$1")' is not in the allowed-modes list; assigning it would create a user the policy layer blocks at every login." \
+        "edit_allowed" "Add the mode under Authentication -> Global enforcement rules."
 }
 
 check_certificate_requirements() { # check_certificate_requirements <user|"">
@@ -333,6 +357,7 @@ _fix_label() {
         configure_yubico_api) echo "Configure the YubiKey validation service now" ;;
         register_yubikey)     echo "Register a YubiKey for a user now" ;;
         generate_totp)        echo "Generate a TOTP secret for a user now" ;;
+        edit_allowed)         echo "Edit the allowed authentication modes now" ;;
         fix_permissions)      echo "Tighten secret file permissions now" ;;
         *)                    echo "$1" ;;
     esac
@@ -359,6 +384,8 @@ apply_dependency_fix() { # apply_dependency_fix <id> <user|"">
             _yubi_pick_user "Register YubiKey" yubikey_register; rc=$? ;;
         generate_totp)
             _totp_pick_user "Enable TOTP" totp_generate; rc=$? ;;
+        edit_allowed)
+            auth_edit_allowed_modes; rc=$? ;;
         fix_permissions)
             _fix_secret_perms; rc=$? ;;
         *)

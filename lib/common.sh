@@ -7,33 +7,41 @@
 # private keys or client profile contents. Log operational events only.
 # =============================================================================
 
-readonly OVM_VERSION="1.2.2"
+readonly OVM_VERSION="2.0.0"
 
 # --- Paths -------------------------------------------------------------------
-readonly OVM_ETC_DIR="/etc/openvpn-manager"
-readonly OVM_CONFIG_FILE="${OVM_ETC_DIR}/config.conf"
-readonly OVM_LOG_FILE="/var/log/openvpn-manager.log"
-readonly OVM_BACKUP_DIR="${OVM_ETC_DIR}/backups"
-readonly OVM_CLIENT_DIR="${OVM_ETC_DIR}/clients"
-readonly OVM_TOTP_DIR="${OVM_ETC_DIR}/totp"
-readonly OVM_YUBI_DIR="${OVM_ETC_DIR}/yubikey"
-readonly OVM_YUBI_AUTHFILE="${OVM_YUBI_DIR}/authorized_yubikeys"
-readonly OVM_TEMPLATE_FILE="${OVM_ETC_DIR}/client-template.txt"
-readonly OVM_FW_DIR="${OVM_ETC_DIR}/firewall"
+# ":=" pattern: production values are unchanged, but the test suites can
+# pre-set any path to a sandbox location before sourcing this file.
+: "${OVM_ETC_DIR:=/etc/openvpn-manager}"
+: "${OVM_CONFIG_FILE:=${OVM_ETC_DIR}/config.conf}"
+: "${OVM_LOG_FILE:=/var/log/openvpn-manager.log}"
+: "${OVM_BACKUP_DIR:=${OVM_ETC_DIR}/backups}"
+: "${OVM_CLIENT_DIR:=${OVM_ETC_DIR}/clients}"
+: "${OVM_TOTP_DIR:=${OVM_ETC_DIR}/totp}"
+: "${OVM_YUBI_DIR:=${OVM_ETC_DIR}/yubikey}"
+: "${OVM_YUBI_AUTHFILE:=${OVM_YUBI_DIR}/authorized_yubikeys}"
+: "${OVM_TEMPLATE_FILE:=${OVM_ETC_DIR}/client-template.txt}"
+: "${OVM_FW_DIR:=${OVM_ETC_DIR}/firewall}"
 
-readonly OVPN_DIR="/etc/openvpn"
-readonly OVPN_SERVER_DIR="/etc/openvpn/server"
-readonly OVPN_SERVER_CONF="${OVPN_SERVER_DIR}/server.conf"
-readonly OVPN_STATUS_LOG="/var/log/openvpn/status.log"
-readonly OVPN_SERVICE="openvpn-server@server"
+: "${OVPN_DIR:=/etc/openvpn}"
+: "${OVPN_SERVER_DIR:=/etc/openvpn/server}"
+: "${OVPN_SERVER_CONF:=${OVPN_SERVER_DIR}/server.conf}"
+: "${OVPN_STATUS_LOG:=/var/log/openvpn/status.log}"
+: "${OVPN_SERVICE:=openvpn-server@server}"
 
-readonly EASYRSA_DIR="/etc/openvpn/easy-rsa"
-readonly PKI_DIR="${EASYRSA_DIR}/pki"
+: "${EASYRSA_DIR:=/etc/openvpn/easy-rsa}"
+: "${PKI_DIR:=${EASYRSA_DIR}/pki}"
 
-readonly PAM_SERVICE_NAME="openvpn"
-readonly PAM_FILE="/etc/pam.d/openvpn"
-readonly VPN_GROUP="openvpn-users"
-readonly CN_VERIFY_SCRIPT="${OVPN_SERVER_DIR}/verify-cn.sh"
+: "${PAM_SERVICE_NAME:=openvpn}"
+: "${PAM_FILE:=/etc/pam.d/openvpn}"
+: "${VPN_GROUP:=openvpn-users}"
+: "${CN_VERIFY_SCRIPT:=${OVPN_SERVER_DIR}/verify-cn.sh}"   # legacy (v1.x), removed on migration
+
+readonly OVM_ETC_DIR OVM_CONFIG_FILE OVM_LOG_FILE OVM_BACKUP_DIR \
+         OVM_CLIENT_DIR OVM_TOTP_DIR OVM_YUBI_DIR OVM_YUBI_AUTHFILE \
+         OVM_TEMPLATE_FILE OVM_FW_DIR \
+         OVPN_DIR OVPN_SERVER_DIR OVPN_SERVER_CONF OVPN_STATUS_LOG OVPN_SERVICE \
+         EASYRSA_DIR PKI_DIR PAM_SERVICE_NAME PAM_FILE VPN_GROUP CN_VERIFY_SCRIPT
 
 # --- VPN network constants ---------------------------------------------------
 readonly VPN_SUBNET4="10.8.0.0"
@@ -51,12 +59,26 @@ readonly -a OVM_CONFIG_KEYS=(
     INSTALLED ENDPOINT PORT PROTOCOL IPV6_ENABLED NIC
     DNS1 DNS2 DNS_LABEL
     SERVER_NAME AUTH_MODE TOTP_NULLOK ENFORCE_CN_MATCH
+    AUTH_ALLOWED_MODES AUTH_DEFAULT_MODE
     YUBICO_ID YUBICO_KEY YUBICO_URL
     FIREWALL_BACKEND PLUGIN_PATH
     PKI_ALGO PKI_CURVE PKI_RSA_BITS
     DATA_CIPHERS DATA_FALLBACK TLS_MIN CONTROL_WRAP AUTH_DIGEST
     CA_DAYS SERVER_CERT_DAYS CLIENT_CERT_DAYS CRL_DAYS
 )
+
+# The five supported per-user authentication modes (a client certificate is
+# always required on top; see docs/AUTHENTICATION.md).
+readonly -a OVM_AUTH_MODES=(cert password password_totp yubikey password_yubikey)
+
+is_valid_auth_mode() {
+    local m
+    for m in "${OVM_AUTH_MODES[@]}"; do [[ "$m" == "$1" ]] && return 0; done
+    return 1
+}
+mode_uses_password() { [[ "$1" == password || "$1" == password_totp || "$1" == password_yubikey ]]; }
+mode_uses_totp()     { [[ "$1" == password_totp ]]; }
+mode_uses_yubikey()  { [[ "$1" == yubikey || "$1" == password_yubikey ]]; }
 
 # =============================================================================
 # Logging
@@ -156,9 +178,11 @@ IPV6_ENABLED="no"
 NIC=""
 DNS1="" DNS2="" DNS_LABEL=""
 SERVER_NAME=""
-AUTH_MODE="cert"
-TOTP_NULLOK="no"
-ENFORCE_CN_MATCH="yes"
+AUTH_MODE="cert"            # legacy (v1.x global mode) - read for migration only
+TOTP_NULLOK="no"            # legacy (v1.x) - superseded by per-user modes
+ENFORCE_CN_MATCH="yes"      # v2: always enforced by the policy layer
+AUTH_ALLOWED_MODES=""       # space-separated; set by installer/migration
+AUTH_DEFAULT_MODE="cert"    # preselected mode when adding a new user
 YUBICO_ID="" YUBICO_KEY="" YUBICO_URL=""
 FIREWALL_BACKEND=""
 PLUGIN_PATH=""
@@ -184,13 +208,25 @@ config_sanitize() {
     local fixed=""
     is_valid_port "$PORT" || { fixed+=" PORT"; PORT="1194"; }
     [[ "$PROTOCOL" == "udp" || "$PROTOCOL" == "tcp" ]] || { fixed+=" PROTOCOL"; PROTOCOL="udp"; }
-    case "$AUTH_MODE" in
-        cert|password|password_totp|yubikey|password_yubikey) ;;
-        *) fixed+=" AUTH_MODE"; AUTH_MODE="cert" ;;
-    esac
+    is_valid_auth_mode "$AUTH_MODE" || { fixed+=" AUTH_MODE"; AUTH_MODE="cert"; }
+    if [[ -n "$AUTH_ALLOWED_MODES" ]]; then
+        local m cleaned=""
+        for m in $AUTH_ALLOWED_MODES; do
+            is_valid_auth_mode "$m" && cleaned+="${cleaned:+ }${m}"
+        done
+        [[ "$cleaned" == "$AUTH_ALLOWED_MODES" ]] || fixed+=" AUTH_ALLOWED_MODES"
+        AUTH_ALLOWED_MODES="${cleaned:-cert}"
+    fi
+    if ! is_valid_auth_mode "$AUTH_DEFAULT_MODE" \
+            || { [[ -n "$AUTH_ALLOWED_MODES" ]] \
+                 && [[ " ${AUTH_ALLOWED_MODES} " != *" ${AUTH_DEFAULT_MODE} "* ]]; }; then
+        fixed+=" AUTH_DEFAULT_MODE"
+        AUTH_DEFAULT_MODE="${AUTH_ALLOWED_MODES%% *}"
+        [[ -n "$AUTH_DEFAULT_MODE" ]] || AUTH_DEFAULT_MODE="cert"
+    fi
     [[ "$IPV6_ENABLED" == "yes" ]] || IPV6_ENABLED="no"
     [[ "$TOTP_NULLOK" == "yes" ]] || TOTP_NULLOK="no"
-    [[ "$ENFORCE_CN_MATCH" == "no" ]] || ENFORCE_CN_MATCH="yes"
+    ENFORCE_CN_MATCH="yes"   # v2: the auth-policy layer always enforces CN=username
     [[ "$INSTALLED" == "yes" ]] || INSTALLED="no"
     if [[ -n "$ENDPOINT" ]] && ! is_valid_endpoint "$ENDPOINT"; then
         fixed+=" ENDPOINT"; ENDPOINT=""
