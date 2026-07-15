@@ -663,6 +663,21 @@ auth_validate_report() {
     else
         _v FAIL "Policy file missing - per-user authentication is NOT enforced"
     fi
+    # OpenVPN's unprivileged user must be able to TRAVERSE the config dirs
+    # at runtime (run auth-policy.sh, read the policy file, re-read crl.pem).
+    # A 0700 /etc/openvpn (e.g. from a reinstall under umask 077) silently
+    # breaks every credential login.
+    local dirs_ok="yes" dperm
+    for m in "$OVPN_DIR" "$OVPN_SERVER_DIR"; do
+        [[ -d "$m" ]] || continue
+        dperm="$(stat -c '%a' "$m" 2>/dev/null)"
+        case "${dperm: -1}" in
+            1|3|5|7) ;;
+            *) dirs_ok="no"
+               _v FAIL "${m} is mode ${dperm} - OpenVPN's unprivileged user cannot enter it; credential logins and CRL re-reads fail. Fix: chmod 755 ${m}" ;;
+        esac
+    done
+    [[ "$dirs_ok" == "yes" ]] && _v PASS "Server config directories traversable by the OpenVPN runtime user"
     [[ -x "$OVM_POLICY_SCRIPT" ]]    && _v PASS "auth-policy.sh present and executable" \
                                      || _v FAIL "auth-policy.sh missing/not executable - ALL logins are rejected"
     [[ -x "$OVM_PAM_EMPTY_SCRIPT" ]] && _v PASS "pam-allow-empty.sh present and executable" \

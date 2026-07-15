@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.3 — 2026-07-15
+
+### Fixed
+- **Credential logins failed when `/etc/openvpn` was mode 0700.** The tool runs under `umask 077`; after an uninstall/reinstall cycle a `mkdir -p` could recreate `/etc/openvpn` as 0700, so OpenVPN's unprivileged runtime user could not traverse into `/etc/openvpn/server` — `auth-policy.sh` never executed (no `auth-policy:` journal lines at all) and every credential login was rejected; CRL re-reads were affected the same way. Writing the auth artifacts now always restores 0755 on `/etc/openvpn` and `/etc/openvpn/server` (directory modes carry no secrets — the sensitive files inside keep 0600/0400), and the "Validate authentication configuration" report flags non-traversable config directories with the exact `chmod` to run.
+
 ## 2.0.2 — 2026-07-15
 
 ### Fixed

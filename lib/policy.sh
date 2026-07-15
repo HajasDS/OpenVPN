@@ -132,6 +132,20 @@ policy_sync_groups() { # policy_sync_groups <user> <mode>
 # Generated helper scripts
 # -----------------------------------------------------------------------------
 
+_policy_dirs_public() {
+    # OpenVPN drops privileges to 'nobody' and must still TRAVERSE these
+    # directories at runtime (execute auth-policy.sh, read the policy file,
+    # re-read crl.pem). The tool runs with umask 077, so a mkdir -p after an
+    # uninstall/reinstall cycle can leave /etc/openvpn mode 0700 - which
+    # silently breaks every credential login. Directory modes carry no
+    # secrets; the sensitive FILES inside stay 0600/0400.
+    local d
+    for d in "$OVPN_DIR" "$OVPN_SERVER_DIR"; do
+        [[ -d "$d" ]] && chmod 755 "$d" 2>/dev/null
+    done
+    return 0
+}
+
 write_policy_script() {
     # The per-connection policy gate. OpenVPN runs it as its UNPRIVILEGED
     # user via 'auth-user-pass-verify ... via-file' - it can read the policy
@@ -191,6 +205,7 @@ EOF
     } > "$OVM_POLICY_SCRIPT"
     chmod 755 "$OVM_POLICY_SCRIPT"
     chown root:root "$OVM_POLICY_SCRIPT" 2>/dev/null || true
+    _policy_dirs_public
 }
 
 write_pam_empty_script() {
@@ -209,4 +224,5 @@ exit 1
 EOF
     chmod 755 "$OVM_PAM_EMPTY_SCRIPT"
     chown root:root "$OVM_PAM_EMPTY_SCRIPT" 2>/dev/null || true
+    _policy_dirs_public
 }
