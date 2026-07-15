@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.1 — 2026-07-15
+
+### Fixed
+- **OpenVPN failed to start (restart loop) when any credential mode was in use.** The v2.0.0 PAM prompt map was 17 tokens; OpenVPN parses at most 16 tokens per plugin line and silently dropped the last one, leaving an odd-length name/value list — `PLUGIN AUTH-PAM: bad name/value list length`, fatal at init, systemd restart loop. The map is now 9 tokens (`ubi PASSWORD erification OTP assword PASSWORD ogin USERNAME`): each name has its first letter dropped so one substring pair matches either capitalisation, and `ubi` is matched first because pam_yubico's prompt embeds the username. On startup the tool detects a server.conf still carrying the oversized v2.0.0 map, regenerates it and restarts the service automatically.
+- Regression guard added to the smoke tests: the generated plugin line must stay within 16 tokens with an even name/value list.
+
 ## 2.0.0 — 2026-07-09
 
 ### Added

@@ -182,6 +182,8 @@ Continue at your own risk?" defaultno || exit 0
     if openvpn_is_installed && ! policy_ready; then
         auth_migrate_v2 || log_warn "Per-user authentication migration postponed"
     fi
+    # v2.0.0 hotfix: repair the oversized PAM prompt map (restart-loop bug).
+    auth_repair_prompt_map
 
     main_menu
 }
