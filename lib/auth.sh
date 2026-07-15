@@ -629,12 +629,12 @@ auth_server_directives() { # emitted into server.conf by write_server_conf
         fi
         echo "# PAM verifies the credentials (per-user gated stack in ${PAM_FILE})."
         echo "# The quoted map answers each PAM prompt from the client's login"
-        echo "# fields by SUBSTRING match. The first letter of each name is left"
-        echo "# off so one pair matches either capitalisation, and 'ubi' comes"
-        echo "# first because pam_yubico's prompt embeds the username. OpenVPN"
-        echo "# parses at most 16 tokens per plugin line - keep this map short"
-        echo "# (a truncated, odd-length map makes the plugin fail to load)."
-        echo "plugin ${plugin} \"${PAM_SERVICE_NAME} ubi PASSWORD erification OTP assword PASSWORD ogin USERNAME\""
+        echo "# fields; the plugin matches each name as a CASE-INSENSITIVE PREFIX"
+        echo "# of the prompt ('password' answers 'Password: ', 'yubikey' answers"
+        echo "# 'YubiKey for ...'). 'login' answers PAM's username lookup. Keep"
+        echo "# this map short: OpenVPN parses at most 16 tokens per plugin line"
+        echo "# and a truncated, odd-length map makes the plugin fail to load."
+        echo "plugin ${plugin} \"${PAM_SERVICE_NAME} login USERNAME password PASSWORD verification OTP yubikey PASSWORD\""
         echo "# renegotiation token so OTP users are not re-challenged hourly"
         echo "auth-gen-token 43200"
     else
@@ -758,23 +758,28 @@ Legend: PASS = ok, WARN = review recommended, FAIL = users affected/blocked."
 }
 
 auth_repair_prompt_map() {
-    # v2.0.0 emitted a PAM prompt map longer than OpenVPN's 16-token
-    # per-line parser limit; the silently truncated (odd-length) list made
-    # openvpn-plugin-auth-pam fail to initialize and the service restart-loop.
-    # Detect the old map at startup, regenerate server.conf and bring the
-    # service back up.
+    # Two defective PAM prompt maps shipped and are repaired at startup:
+    #   v2.0.0: 17 tokens - over OpenVPN's 16-token line limit, silently
+    #           truncated to an odd list -> plugin init fatal, restart loop.
+    #           Signature: '... Yubikey PASSWORD yubikey PASSWORD"'.
+    #   v2.0.1: first-letter-dropped names ('ogin', 'assword', ...) - but the
+    #           plugin matches names as PREFIXES of the PAM prompts, so no
+    #           prompt ever matched -> every credential login failed with
+    #           'Conversation error'. Signature: '... ubi PASSWORD erification ...'.
+    # The current map ('login USERNAME password PASSWORD ...') matches
+    # neither pattern.
     openvpn_is_installed && policy_ready || return 0
-    grep -q 'yubikey PASSWORD"' "$OVPN_SERVER_CONF" 2>/dev/null || return 0
-    log_warn "v2.0.0 oversized PAM prompt map found in server.conf - repairing"
+    grep -Eq '^plugin .*(Yubikey PASSWORD yubikey PASSWORD"| ubi PASSWORD erification )' \
+        "$OVPN_SERVER_CONF" 2>/dev/null || return 0
+    log_warn "Defective v2.0.0/v2.0.1 PAM prompt map found in server.conf - repairing"
     auth_refresh_stack
-    if [[ "$INSTALLED" == "yes" ]] && ! svc_is_active; then
-        ui_msg "Configuration repaired" \
-"This server was hit by a v2.0.0 bug: the generated PAM prompt map
-exceeded OpenVPN's 16-token line limit, the auth plugin failed to
-load, and the service was stuck in a restart loop.
+    ui_msg "Configuration repaired" \
+"This server carried a defective PAM prompt map from v2.0.0/v2.0.1
+(auth plugin failing to load, or every password/OTP login failing
+with 'Conversation error').
 
-server.conf has been regenerated with the fixed map; OpenVPN will now
-be restarted."
+server.conf has been regenerated with the corrected map."
+    if [[ "$INSTALLED" == "yes" ]] && ! svc_is_active; then
         svc_restart_checked || true
     fi
     return 0

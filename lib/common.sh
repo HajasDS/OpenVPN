@@ -7,7 +7,7 @@
 # private keys or client profile contents. Log operational events only.
 # =============================================================================
 
-readonly OVM_VERSION="2.0.1"
+readonly OVM_VERSION="2.0.2"
 
 # --- Paths -------------------------------------------------------------------
 # ":=" pattern: production values are unchanged, but the test suites can

@@ -150,20 +150,21 @@ modes at once and the challenge channel is reserved for TOTP.
 **v1.x `password_yubikey` profiles must be regenerated after migration.**
 
 The plugin's prompt map in `server.conf` answers each PAM prompt from the
-client's login fields (the plugin matches each pair name as a **substring**
-of the PAM prompt):
+client's login fields. The plugin matches each pair name as a
+**case-insensitive prefix** of the PAM prompt (`password` answers
+`Password: `, `yubikey` answers `YubiKey for 'alice': `, `login` answers
+PAM's username lookup):
 
 ```
-plugin .../openvpn-plugin-auth-pam.so "openvpn ubi PASSWORD erification OTP assword PASSWORD ogin USERNAME"
+plugin .../openvpn-plugin-auth-pam.so "openvpn login USERNAME password PASSWORD verification OTP yubikey PASSWORD"
 ```
 
-Two deliberate quirks: each name has its first letter dropped so a single
-pair matches either capitalisation (`assword` matches `Password:` and
-`password:`), and `ubi` is listed first because pam_yubico's prompt embeds
-the username (`YubiKey for 'alice':`) — matching it first means no username
-content can misroute the answer. The map must stay short: OpenVPN parses at
-most **16 tokens** per plugin line and silently truncates beyond that, and a
-truncated (odd-length) list makes the plugin fail to initialize.
+The map must stay short: OpenVPN parses at most **16 tokens** per plugin
+line and silently truncates beyond that, and a truncated (odd-length) list
+makes the plugin fail to initialize. (v2.0.0 shipped a 17-token map —
+service restart loop; v2.0.1 shipped substring-style names that never
+prefix-matched — every credential login failed. Both are detected and
+repaired automatically at startup since v2.0.2.)
 
 `auth-gen-token 43200` issues a session token so OTP users are not
 re-challenged on hourly renegotiation.

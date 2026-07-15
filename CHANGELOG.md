@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.2 — 2026-07-15
+
+### Fixed
+- **Every password/OTP login failed with `Conversation error` on v2.0.1.** The auth-pam plugin matches prompt-map names as case-insensitive **prefixes** of the PAM prompts, not substrings — so the v2.0.1 first-letter-dropped names (`ogin`, `assword`, …) never matched anything, PAM could not even obtain the username (`pam_succeed_if: cannot determine user name: Conversation error`), and every credential login was rejected. The map is now the plain prefix form `login USERNAME password PASSWORD verification OTP yubikey PASSWORD` (9 tokens, well within OpenVPN's 16-token line limit; case-insensitivity covers `Password:`/`YubiKey for …` capitalisations).
+- The startup repair now detects **both** defective maps (v2.0.0 oversized, v2.0.1 non-matching), regenerates server.conf, always tells the administrator, and restarts the service when needed.
+
 ## 2.0.1 — 2026-07-15
 
 ### Fixed
